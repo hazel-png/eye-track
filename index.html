@@ -2,114 +2,153 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Spatial Position Audio</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>3D Spatial Sound Lab</title>
     <style>
-        :root { --gold: #d4af37; --bg: #050505; }
+        :root { --gold: #d4af37; --bg: #0a0a0a; --grid: rgba(212, 175, 55, 0.15); }
         body {
             margin: 0; background: var(--bg); color: white;
-            font-family: sans-serif; display: flex; flex-direction: column;
-            justify-content: center; align-items: center; height: 100vh;
-            overflow: hidden; touch-action: none;
+            font-family: 'Inter', sans-serif; display: flex;
+            flex-direction: column; align-items: center; min-height: 100vh;
+            touch-action: none; padding: 20px;
         }
-        .container { text-align: center; width: 100%; }
-        #moveBtn {
-            width: 200px; height: 200px; border-radius: 40px;
-            background: #111; border: 2px solid var(--gold);
-            color: var(--gold); font-size: 1rem; cursor: pointer;
-            margin: 20px auto; display: flex; justify-content: center; align-items: center;
+        .title { font-size: 0.7rem; letter-spacing: 5px; color: var(--gold); margin-bottom: 20px; opacity: 0.8; }
+        
+        /* グリッド共通スタイル */
+        .grid-container {
+            position: relative; width: 280px; height: 280px;
+            background: radial-gradient(circle, #111 0%, #050505 100%);
+            border: 1px solid var(--grid); border-radius: 20px; margin-bottom: 30px;
+            box-shadow: 0 0 30px rgba(0,0,0,0.5);
         }
-        #moveBtn:active { background: #222; box-shadow: 0 0 40px var(--gold); }
-        .pos-display { font-family: monospace; font-size: 1.2rem; color: var(--gold); margin: 20px; }
-        .hint { font-size: 0.7rem; color: #666; }
+        .grid-line {
+            position: absolute; background: var(--grid);
+        }
+        .label {
+            position: absolute; font-size: 0.6rem; color: #555; font-weight: bold; letter-spacing: 2px;
+        }
+
+        /* 中央の「頭」 */
+        .head {
+            position: absolute; top: 50%; left: 50%; width: 12px; height: 12px;
+            background: #444; border-radius: 50%; transform: translate(-50%, -50%);
+            box-shadow: 0 0 10px rgba(255,255,255,0.1);
+        }
+
+        /* 操作する黄色い丸（音源） */
+        .source-node {
+            position: absolute; width: 24px; height: 24px;
+            background: var(--gold); border-radius: 50%;
+            transform: translate(-50%, -50%); cursor: pointer;
+            box-shadow: 0 0 20px var(--gold); z-index: 10;
+        }
+
+        .status-panel { font-family: monospace; font-size: 0.7rem; color: var(--gold); margin-bottom: 10px; }
+        input[type="file"] { margin-bottom: 20px; color: #666; font-size: 0.7rem; }
     </style>
 </head>
 <body>
 
-<div class="container">
-    <div class="hint">1. ファイルを選択<br>2. ボタンを押しながらスマホを前後左右に振る</div>
-    <input type="file" id="fileInput" accept="audio/*" style="margin: 20px;">
-    
-    <div id="moveBtn">HOLD & MOVE<br>IN SPACE</div>
+<div class="title">SPATIAL POSITION CONTROL</div>
 
-    <div class="pos-display">
-        X: <span id="posX">0.0</span><br>
-        Y: <span id="posY">0.0</span><br>
-        Z: <span id="posZ">0.0</span>
-    </div>
-    <button onclick="resetPos()" style="background:none; border:1px solid #444; color:#888; padding:5px 15px; border-radius:20px;">RESET POS</button>
+<input type="file" id="fileInput" accept="audio/*">
+
+<div class="status-panel" id="status">X: 0.00 | Y: 0.00 | Z: 0.00</div>
+
+<div class="grid-container" id="horizontalGrid">
+    <div class="label" style="top: 10px; left: 50%; transform: translateX(-50%);">FRONT</div>
+    <div class="label" style="bottom: 10px; left: 50%; transform: translateX(-50%);">BACK</div>
+    <div class="label" style="left: 10px; top: 50%; transform: translateY(-50%);">LEFT</div>
+    <div class="label" style="right: 10px; top: 50%; transform: translateY(-50%);">RIGHT</div>
+    <div class="grid-line" style="width: 100%; height: 1px; top: 50%;"></div>
+    <div class="grid-line" style="height: 100%; width: 1px; left: 50%;"></div>
+    <div class="head"></div>
+    <div class="source-node" id="nodeXZ" style="top: 50%; left: 50%;"></div>
+</div>
+
+<div class="grid-container" id="verticalGrid" style="height: 120px;">
+    <div class="label" style="top: 10px; left: 50%; transform: translateX(-50%);">TOP</div>
+    <div class="label" style="bottom: 10px; left: 50%; transform: translateX(-50%);">BOTTOM</div>
+    <div class="grid-line" style="width: 100%; height: 1px; top: 50%;"></div>
+    <div class="head"></div>
+    <div class="source-node" id="nodeY" style="top: 50%; left: 50%;"></div>
 </div>
 
 <script>
     let audioCtx, panner, source;
     let posX = 0, posY = 0, posZ = 0;
-    let isMoving = false;
 
+    const nodeXZ = document.getElementById('nodeXZ');
+    const nodeY = document.getElementById('nodeY');
+    const status = document.getElementById('status');
     const fileInput = document.getElementById('fileInput');
-    const moveBtn = document.getElementById('moveBtn');
 
+    // オーディオ初期化
     fileInput.onchange = async (e) => {
         const file = e.target.files[0];
         if (!file) return;
-
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        panner = audioCtx.createPanner();
-        panner.panningModel = 'HRTF';
-        panner.distanceModel = 'inverse'; // 遠ざかると音が小さくなる設定
-
+        if (!audioCtx) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            panner = audioCtx.createPanner();
+            panner.panningModel = 'HRTF';
+            panner.distanceModel = 'inverse';
+        }
         const arrayBuffer = await file.arrayBuffer();
         const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-
+        if (source) source.stop();
         source = audioCtx.createBufferSource();
         source.buffer = audioBuffer;
         source.loop = true;
         source.connect(panner);
         panner.connect(audioCtx.destination);
         source.start();
-
-        // センサー許可（iOS）
-        if (typeof DeviceMotionEvent.requestPermission === 'function') {
-            DeviceMotionEvent.requestPermission();
-        }
+        audioCtx.resume();
     };
 
-    window.addEventListener('devicemotion', (event) => {
-        if (!isMoving || !panner) return;
+    function updatePanner() {
+        if (!panner) return;
+        // PannerNodeの座標系: X(左右), Y(上下), Z(前後: 手前がプラス)
+        // グリッド上のFrontはZマイナス方向
+        panner.positionX.setTargetAtTime(posX * 15, audioCtx.currentTime, 0.05);
+        panner.positionY.setTargetAtTime(posY * 15, audioCtx.currentTime, 0.05);
+        panner.positionZ.setTargetAtTime(posZ * -15, audioCtx.currentTime, 0.05);
+        status.innerText = `X: ${(posX*15).toFixed(2)} | Y: ${(posY*15).toFixed(2)} | Z: ${(posZ*-15).toFixed(2)}`;
+    }
 
-        // 加速度を取得（重力の影響を除いた値）
-        const acc = event.acceleration;
-        if (!acc.x) return;
+    // ドラッグ操作の実装
+    function setupDraggable(element, grid, callback) {
+        let active = false;
+        const start = () => { active = true; if(audioCtx) audioCtx.resume(); };
+        const stop = () => { active = false; };
+        const move = (e) => {
+            if (!active) return;
+            const rect = grid.getBoundingClientRect();
+            const touch = e.touches ? e.touches[0] : e;
+            let x = (touch.clientX - rect.left) / rect.width;
+            let y = (touch.clientY - rect.top) / rect.height;
+            x = Math.max(0, Math.min(1, x));
+            y = Math.max(0, Math.min(1, y));
+            element.style.left = (x * 100) + '%';
+            element.style.top = (y * 100) + '%';
+            callback(x * 2 - 1, y * 2 - 1); // -1.0 to 1.0 に変換
+            updatePanner();
+        };
+        grid.addEventListener('mousedown', start);
+        window.addEventListener('mouseup', stop);
+        window.addEventListener('mousemove', move);
+        grid.addEventListener('touchstart', start);
+        window.addEventListener('touchend', stop);
+        window.addEventListener('touchmove', move);
+    }
 
-        // 加速度を位置に加算（簡易的な積分的な動き）
-        // 感度調整のために 0.2 を掛けています
-        posX += acc.x * 0.2;
-        posY += acc.y * 0.2;
-        posZ += acc.z * 0.2;
-
-        // 限界値（あまり遠くにいきすぎないよう制限）
-        posX = Math.max(-20, Math.min(20, posX));
-        posY = Math.max(-20, Math.min(20, posY));
-        posZ = Math.max(-20, Math.min(20, posZ));
-
-        // 音源の位置を更新
-        panner.positionX.setTargetAtTime(posX, audioCtx.currentTime, 0.1);
-        panner.positionY.setTargetAtTime(posY, audioCtx.currentTime, 0.1);
-        panner.positionZ.setTargetAtTime(posZ, audioCtx.currentTime, 0.1);
-
-        // 表示更新
-        document.getElementById('posX').innerText = posX.toFixed(1);
-        document.getElementById('posY').innerText = posY.toFixed(1);
-        document.getElementById('posZ').innerText = posZ.toFixed(1);
+    setupDraggable(nodeXZ, document.getElementById('horizontalGrid'), (x, z) => {
+        posX = x; posZ = z;
     });
 
-    const startMoving = () => { isMoving = true; if(audioCtx) audioCtx.resume(); };
-    const stopMoving = () => { isMoving = false; };
-    const resetPos = () => { posX = 0; posY = 0; posZ = 0; };
+    setupDraggable(nodeY, document.getElementById('verticalGrid'), (x, y) => {
+        posY = -y; // 上方向がプラス
+    });
 
-    moveBtn.addEventListener('mousedown', startMoving);
-    moveBtn.addEventListener('mouseup', stopMoving);
-    moveBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startMoving(); });
-    moveBtn.addEventListener('touchend', stopMoving);
 </script>
 </body>
 </html>
