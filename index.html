@@ -2,82 +2,63 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>アイトラッキング（顔非表示・安定版）</title>
+    <title>アイトラッキング - 修正版</title>
     <style>
-        body { 
-            margin: 0; padding: 0; overflow: hidden; 
-            background-color: #f0f0f0; width: 100vw; height: 100vh;
-        }
+        body { margin: 0; background: #f0f0f0; font-family: sans-serif; }
         #status {
             position: fixed; top: 10px; left: 10px; z-index: 9999;
-            background: rgba(0,0,0,0.8); color: white; padding: 15px;
-            font-family: sans-serif; border-radius: 8px;
-            pointer-events: none; line-height: 1.5;
+            background: rgba(0,0,0,0.8); color: white; padding: 15px; border-radius: 8px;
         }
-        /* 視線のドットを強調 */
-        #webgazerGazeDot {
-            width: 20px !important;
-            height: 20px !important;
-            background-color: #ff0000 !important;
-            border: 3px solid #ffffff !important;
-            box-shadow: 0 0 10px rgba(0,0,0,0.5);
-            display: block !important; /* 強制表示 */
-        }
-        /* カメラプレビュー用の要素を物理的に隠す（念のため） */
+        /* カメラプレビューとMediaPipeのデバッグ表示を徹底的に隠す */
+        canvas, video, .dg { display: none !important; }
         #webgazerVideoContainer, #webgazerVideoFeed, #webgazerFaceOverlay, #webgazerFaceFeedbackBox {
             display: none !important;
-            visibility: hidden !important;
-            opacity: 0 !important;
+        }
+        /* 視線の点だけは出す */
+        #webgazerGazeDot {
+            display: block !important;
+            background-color: red !important;
         }
     </style>
 </head>
 <body>
 
-    <div id="status">
-        【動作手順】<br>
-        1. カメラの使用を許可する<br>
-        2. 画面の<b>あちこちをクリック</b>しながら、その点を見つめる<br>
-        3. 赤い点が視線に追従し始めます
-    </div>
+<div id="status">セットアップ中...（カメラを許可してください）</div>
 
-    <script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/webgazer@2.1.0/dist/webgazer.js"></script>
 
-    <script>
-        async function initGazer() {
-            // ステータス更新
-            const status = document.getElementById('status');
+<script>
+    window.onload = async () => {
+        const status = document.getElementById('status');
 
-            try {
-                await webgazer.setRegression('ridge')
-                    .setGazeListener((data, elapsedTime) => {
-                        if (data == null) return;
-                        // data.x, data.y で座標取得可能
-                    })
-                    .begin();
+        try {
+            // WebGazerの開始
+            await webgazer.setRegression('ridge')
+                .setGazeListener((data, clock) => {
+                    if (data == null) return;
+                })
+                .begin();
 
-                // プレビューをオフ、ポイント表示をオン
-                webgazer.showVideoPreview(false)
-                        .showPredictionPoints(true)
-                        .applyKalmanFilter(true);
+            // 設定の適用
+            webgazer.showVideoPreview(false)    // 顔を表示しない
+                    .showPredictionPoints(true) // 赤い点だけ出す
+                    .applyKalmanFilter(true);   // 動きを滑らかにする
 
-                status.style.background = "rgba(0,100,0,0.8)";
-                status.innerHTML = "トラッキング中...<br>画面内を数回クリックして精度を高めてください。";
+            status.innerHTML = "トラッキング中！<br>画面の数カ所をクリックして校正してください。";
+            status.style.background = "green";
 
-            } catch (err) {
-                status.style.background = "rgba(150,0,0,0.8)";
-                status.innerHTML = "エラー: カメラの起動に失敗しました。<br>HTTPS環境か localhost で試してください。";
-                console.error(err);
-            }
+        } catch (e) {
+            status.innerHTML = "エラーが発生しました。サーバー(localhost)で実行しているか確認してください。";
+            status.style.background = "red";
+            console.error(e);
         }
+    };
 
-        // ページ読み込み完了時に実行
-        window.addEventListener('DOMContentLoaded', initGazer);
+    window.onbeforeunload = () => {
+        webgazer.saveDataAcrossSessions(false); // データを保存しない
+        webgazer.end();
+    };
+</script>
 
-        // 終了処理
-        window.onbeforeunload = () => {
-            webgazer.end();
-        };
-    </script>
 </body>
 </html>
