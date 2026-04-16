@@ -3,218 +3,138 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Spatial Audio Pro</title>
+    <title>Acoustic Master: Cathedral</title>
     <style>
-        :root {
-            --apple-bg: #f5f5f7;
-            --apple-card: rgba(255, 255, 255, 0.8);
-            --apple-text: #1d1d1f;
-            --apple-blue: #0071e3;
-            --gold: #d4af37;
-        }
-
+        :root { --gold: #d4af37; --bg: #000; --grid: rgba(212, 175, 55, 0.1); --cyan: #00f2ff; }
         body {
-            margin: 0;
-            background-color: var(--apple-bg);
-            color: var(--apple-text);
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            min-height: 100vh;
-            -webkit-font-smoothing: antialiased;
+            margin: 0; background: var(--bg); color: white;
+            font-family: 'Inter', sans-serif; display: flex; flex-direction: column;
+            align-items: center; min-height: 100vh; touch-action: none; padding: 20px;
         }
-
-        .nav {
-            width: 100%;
-            height: 44px;
-            background: rgba(251, 251, 253, 0.8);
-            backdrop-filter: blur(20px);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            font-size: 14px;
-            font-weight: 600;
-            position: fixed;
-            top: 0;
-            z-index: 100;
-        }
-
-        .main-content {
-            margin-top: 80px;
-            width: 90%;
-            max-width: 400px;
-            display: flex;
-            flex-direction: column;
-            gap: 24px;
-        }
-
-        .card {
-            background: var(--apple-card);
-            backdrop-filter: blur(30px) saturate(180%);
-            -webkit-backdrop-filter: blur(30px) saturate(180%);
-            border-radius: 24px;
-            padding: 24px;
-            box-shadow: 0 8px 30px rgba(0,0,0,0.04);
-            border: 1px solid rgba(255,255,255,0.4);
+        .header { text-align: center; margin-bottom: 20px; }
+        .header h1 { font-size: 0.7rem; letter-spacing: 8px; color: var(--gold); text-transform: uppercase; margin: 0; }
+        
+        .console {
+            display: flex; flex-direction: column; gap: 15px; padding: 25px;
+            background: linear-gradient(145deg, #0f0f0f, #050505);
+            border-radius: 30px; border: 1px solid #1a1a1a; box-shadow: 0 50px 100px rgba(0,0,0,0.9);
         }
 
         .grid-container {
-            position: relative;
-            width: 100%;
-            aspect-ratio: 1 / 1;
-            background: #fff;
-            border-radius: 16px;
-            margin-bottom: 12px;
-            overflow: hidden;
-            border: 1px solid #e5e5e5;
+            position: relative; width: 300px; background: #020202;
+            border: 1px solid #222; border-radius: 12px; overflow: hidden;
         }
 
-        .grid-bg {
-            position: absolute;
-            width: 100%;
-            height: 100%;
-            background-image: radial-gradient(#e5e5e5 1px, transparent 1px);
+        .mesh {
+            position: absolute; width: 100%; height: 100%;
+            background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
             background-size: 20px 20px;
         }
 
-        .label-group {
-            display: flex;
-            justify-content: space-between;
-            font-size: 10px;
-            font-weight: 700;
-            color: #86868b;
-            text-transform: uppercase;
-            letter-spacing: 0.1em;
-            margin-bottom: 8px;
-        }
-
         .node {
-            position: absolute;
-            width: 24px;
-            height: 24px;
-            background: var(--apple-blue);
-            border-radius: 50%;
-            transform: translate(-50%, -50%);
-            box-shadow: 0 4px 12px rgba(0,113,227,0.3);
-            z-index: 10;
-            cursor: grab;
-            transition: transform 0.2s cubic-bezier(0.25, 1, 0.5, 1);
-        }
-        .node:active { transform: translate(-50%, -50%) scale(0.9); cursor: grabbing; }
-
-        .head {
-            position: absolute;
-            top: 50%; left: 50%;
-            width: 12px; height: 12px;
-            background: #1d1d1f;
-            border-radius: 50%;
-            transform: translate(-50%, -50%);
+            position: absolute; width: 12px; height: 12px; background: var(--gold);
+            border-radius: 50%; transform: translate(-50%, -50%);
+            box-shadow: 0 0 20px var(--gold); z-index: 10;
         }
 
-        .upload-area {
-            text-align: center;
-            padding: 20px;
-            border: 2px dashed #d2d2d7;
-            border-radius: 16px;
-            color: #86868b;
-            font-size: 14px;
-            cursor: pointer;
-            transition: background 0.2s;
+        .head-core {
+            position: absolute; top: 50%; left: 50%; width: 6px; height: 6px;
+            background: var(--cyan); border-radius: 50%; transform: translate(-50%, -50%);
+            box-shadow: 0 0 10px var(--cyan);
         }
-        .upload-area:hover { background: rgba(0,0,0,0.02); }
 
-        .coord-pill {
-            display: inline-block;
-            padding: 4px 12px;
-            background: #e8e8ed;
-            border-radius: 20px;
-            font-size: 11px;
-            font-weight: 600;
-            color: #1d1d1f;
+        .readout { font-family: monospace; font-size: 0.6rem; color: var(--gold); display: flex; justify-content: space-between; }
+        
+        .upload-btn {
+            background: var(--gold); color: black; border: none; padding: 12px;
+            border-radius: 8px; font-size: 0.7rem; font-weight: bold; cursor: pointer; text-align: center;
         }
+        #fileInput { display: none; }
     </style>
 </head>
 <body>
 
-<div class="nav">Spatial Audio Pro</div>
+<div class="header">
+    <h1>Convolver Reverb Engine</h1>
+</div>
 
-<div class="main-content">
-    <div class="card">
-        <div class="label-group"><span>Left</span><span>Surround View</span><span>Right</span></div>
-        <div class="grid-container" id="gridXZ">
-            <div class="grid-bg"></div>
-            <div class="head"></div>
-            <div class="node" id="nodeXZ" style="top:20%; left:50%;"></div>
-        </div>
-        <div style="text-align: center;"><span class="coord-pill" id="valXZ">Frontal Mode</span></div>
+<div class="console">
+    <div class="readout">
+        <span id="pos-x">X: 0.00</span>
+        <span id="pos-z">Z: 0.00</span>
+        <span id="reverb-mix">REVERB: 100%</span>
     </div>
 
-    <div class="card">
-        <div class="label-group"><span>Bottom</span><span>Elevation</span><span>Top</span></div>
-        <div class="grid-container" id="gridXY" style="aspect-ratio: 4/1;">
-            <div class="grid-bg"></div>
-            <div class="head"></div>
-            <div class="node" id="nodeXY" style="top:50%; left:50%;"></div>
-        </div>
+    <div class="grid-container" id="gridXZ" style="height: 300px;">
+        <div class="mesh"></div>
+        <div class="head-core"></div>
+        <div class="node" id="nodeXZ" style="top:50%; left:50%;"></div>
     </div>
 
-    <div class="card">
-        <input type="file" id="fileInput" hidden>
-        <div class="upload-area" id="dropZone">
-            Choose an Audio File to Begin
-        </div>
+    <div class="grid-container" id="gridXY" style="height: 100px;">
+        <div class="mesh"></div>
+        <div class="head-core"></div>
+        <div class="node" id="nodeXY" style="top:50%; left:50%;"></div>
     </div>
+
+    <label class="upload-btn" for="fileInput">SELECT AUDIO SOURCE</label>
+    <input type="file" id="fileInput" accept="audio/*">
 </div>
 
 <script>
-    let audioCtx, panner, source, filter, reverb;
-    let coord = { x: 0, y: 0, z: -0.6 };
+    let audioCtx, panner, source, filter, convolver, wetGain, dryGain;
+    let coord = { x: 0, y: 0, z: 0 };
 
-    const nodeXZ = document.getElementById('nodeXZ');
-    const nodeXY = document.getElementById('nodeXY');
+    // 数式で「大聖堂の響き」のインパルス応答を生成する関数
+    function createImpulseResponse(duration, decay) {
+        const sampleRate = audioCtx.sampleRate;
+        const length = sampleRate * duration;
+        const impulse = audioCtx.createBuffer(2, length, sampleRate);
+        for (let i = 0; i < 2; i++) {
+            const channelData = impulse.getChannelData(i);
+            for (let j = 0; j < length; j++) {
+                // 指数関数的に減衰するホワイトノイズ
+                channelData[j] = (Math.random() * 2 - 1) * Math.pow(1 - j / length, decay);
+            }
+        }
+        return impulse;
+    }
 
     async function initAudio(file) {
+        if (audioCtx) audioCtx.close();
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         
+        // Panner (HRTF)
         panner = audioCtx.createPanner();
         panner.panningModel = 'HRTF';
-        
-        filter = audioCtx.createBiquadFilter();
-        filter.type = 'lowpass';
-        
-        // --- Apple品質のリバーブ（擬似リバーブ・ネットワーク） ---
-        const verbGain = audioCtx.createGain();
-        verbGain.gain.value = 0.15; // ここでリバーブの深さを調整
 
-        const delay = audioCtx.createDelay();
-        delay.delayTime.value = 0.04;
-        const feedback = audioCtx.createGain();
-        feedback.gain.value = 0.4; // 響きの長さ
+        // Reverb (Convolver)
+        convolver = audioCtx.createConvolver();
+        convolver.buffer = createImpulseResponse(4.0, 6.0); // 4秒の長い残響
 
-        // 接続: Source -> Filter -> Panner -> Out
-        //              |-> Delay -> Feedback -> Loop
-        //              |-> VerbGain -> Out
-        
+        // Mix Control
+        dryGain = audioCtx.createGain();
+        wetGain = audioCtx.createGain();
+        dryGain.gain.value = 0.6; // 直接音
+        wetGain.gain.value = 0.5; // 残響音（ここを上げるとリバーブが深くなる）
+
         const buffer = await file.arrayBuffer();
         const audioData = await audioCtx.decodeAudioData(buffer);
         
-        if (source) source.stop();
         source = audioCtx.createBufferSource();
         source.buffer = audioData;
         source.loop = true;
 
-        source.connect(filter);
-        filter.connect(panner);
-        
-        // リバーブ回路の接続
-        panner.connect(delay);
-        delay.connect(feedback);
-        feedback.connect(delay);
-        delay.connect(verbGain);
-        verbGain.connect(audioCtx.destination);
-        
-        panner.connect(audioCtx.destination);
+        // 接続
+        // Source -> Panner -> Destination (Direct)
+        // Source -> Panner -> Convolver -> WetGain -> Destination (Reverb)
+        source.connect(panner);
+        panner.connect(dryGain);
+        dryGain.connect(audioCtx.destination);
+
+        panner.connect(convolver);
+        convolver.connect(wetGain);
+        wetGain.connect(audioCtx.destination);
         
         source.start();
         update();
@@ -222,20 +142,19 @@
 
     function update() {
         if (!panner) return;
-        const scale = 20;
+        const scale = 30;
         const now = audioCtx.currentTime;
-
         panner.positionX.setTargetAtTime(coord.x * scale, now, 0.1);
         panner.positionY.setTargetAtTime(coord.y * scale, now, 0.1);
         panner.positionZ.setTargetAtTime(coord.z * scale, now, 0.1);
-
-        const dist = Math.sqrt((coord.x*scale)**2 + (coord.y*scale)**2 + (coord.z*scale)**2);
-        filter.frequency.setTargetAtTime(Math.max(3000, 20000 - dist * 500), now, 0.1);
 
         nodeXZ.style.left = ((coord.x + 1) / 2 * 100) + '%';
         nodeXZ.style.top = ((coord.z + 1) / 2 * 100) + '%';
         nodeXY.style.left = ((coord.x + 1) / 2 * 100) + '%';
         nodeXY.style.top = ((-coord.y + 1) / 2 * 100) + '%';
+
+        document.getElementById('pos-x').innerText = `X: ${(coord.x * scale).toFixed(1)}`;
+        document.getElementById('pos-z').innerText = `Z: ${(coord.z * scale).toFixed(1)}`;
     }
 
     function handleDrag(grid, type) {
@@ -254,14 +173,13 @@
         grid.addEventListener('mousedown', () => { isDown = true; audioCtx?.resume(); });
         window.addEventListener('mouseup', () => isDown = false);
         window.addEventListener('mousemove', move);
-        grid.addEventListener('touchstart', (e) => { isDown = true; audioCtx?.resume(); });
+        grid.addEventListener('touchstart', (e) => { isDown = true; e.preventDefault(); audioCtx?.resume(); });
         window.addEventListener('touchend', () => isDown = false);
         window.addEventListener('touchmove', move);
     }
 
     handleDrag(document.getElementById('gridXZ'), 'XZ');
     handleDrag(document.getElementById('gridXY'), 'XY');
-    document.getElementById('dropZone').onclick = () => document.getElementById('fileInput').click();
     document.getElementById('fileInput').onchange = (e) => initAudio(e.target.files[0]);
 </script>
 </body>
