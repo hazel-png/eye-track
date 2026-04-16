@@ -2,36 +2,26 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Hyper-Realistic Spatial Audio Engine</title>
+    <title>Fixed Hyper-Realistic Audio</title>
     <style>
-        body { margin: 0; background: #000; color: #fff; font-family: 'Inter', sans-serif; overflow: hidden; }
+        body { margin: 0; background: #000; color: #fff; font-family: sans-serif; overflow: hidden; }
         #overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; padding: 40px; box-sizing: border-box; z-index: 10; }
-        .ui-bottom { display: flex; justify-content: center; align-items: center; gap: 40px; pointer-events: auto; background: rgba(0,0,0,0.8); padding: 25px 50px; border-radius: 15px; border: 1px solid #333; backdrop-filter: blur(20px); }
-        .btn { cursor: pointer; padding: 15px 35px; background: #fff; border: none; color: #000; border-radius: 5px; font-weight: 800; transition: 0.2s; text-transform: uppercase; }
-        .btn:hover { background: #00d4ff; transform: scale(1.05); }
-        .btn:disabled { background: #222; color: #444; }
-        .slider-group { display: flex; flex-direction: column; gap: 8px; color: #888; font-size: 11px; letter-spacing: 1px; }
-        input[type="range"] { width: 150px; accent-color: #00d4ff; }
-        #status { position: absolute; bottom: 120px; left: 50%; transform: translateX(-50%); font-size: 12px; color: #00d4ff; text-transform: uppercase; letter-spacing: 2px; }
+        .ui-bottom { display: flex; justify-content: center; align-items: center; gap: 20px; pointer-events: auto; background: rgba(20,20,25,0.9); padding: 20px; border-radius: 15px; border: 1px solid #444; }
+        .btn { cursor: pointer; padding: 12px 25px; background: #00d4ff; border: none; color: #000; border-radius: 5px; font-weight: bold; }
+        .btn:disabled { background: #333; color: #666; }
+        #status { font-family: monospace; color: #00d4ff; font-size: 12px; }
     </style>
 </head>
 <body>
 
     <div id="overlay">
-        <div style="text-align: left;">
-            <h1 style="margin:0; font-size: 40px; font-weight: 900; line-height: 1;">PHYSICS<br><span style="color:#00d4ff">AUDIO</span></h1>
-            <p style="color: #444; font-size: 12px; margin-top: 10px;">PROXIMITY / DOPPLER / HRTF / REFLECTION</p>
+        <div>
+            <h1>PHYSICS AUDIO ENGINE</h1>
+            <div id="status">System: Standby</div>
         </div>
-        
-        <div id="status">Ready to initialize system...</div>
-
         <div class="ui-bottom">
-            <label class="btn">Select File<input type="file" id="fileInput" style="display:none" accept="audio/*"></label>
-            <button id="playBtn" class="btn" disabled>Boot Engine</button>
-            <div class="slider-group">
-                <span>ATMOSPHERE (REVERB)</span>
-                <input type="range" id="reverbMix" min="0" max="1" step="0.01" value="0.25">
-            </div>
+            <label class="btn">FILE LOAD<input type="file" id="fileInput" style="display:none" accept="audio/*"></label>
+            <button id="playBtn" class="btn" disabled>START</button>
         </div>
     </div>
 
@@ -49,169 +39,139 @@
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         import { DragControls } from 'three/addons/controls/DragControls.js';
 
-        let scene, camera, renderer, audio, mesh, oControls, dControls, analyser;
-        let reverbNode, wetGain, filterNode, sourceNode;
-        let lastPosition = new THREE.Vector3();
+        let scene, camera, renderer, audio, mesh, oControls, dControls;
+        let filterNode, reverbNode, wetGain;
+        let lastPos = new THREE.Vector3();
+        let isReady = false;
 
         init();
         animate();
 
         function init() {
             scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x000000);
-
-            camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
-            camera.position.set(15, 12, 20);
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 10, 20);
 
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.setPixelRatio(window.devicePixelRatio);
             document.body.appendChild(renderer.domElement);
 
-            // 環境デザイン
-            const grid = new THREE.GridHelper(200, 100, 0x111111, 0x050505);
-            scene.add(grid);
+            scene.add(new THREE.GridHelper(100, 50, 0x222222, 0x111111));
 
-            // リスナー
-            const listenerGroup = new THREE.Group();
-            const head = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5), new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true }));
-            listenerGroup.add(head);
-            scene.add(listenerGroup);
+            // リスナー（中央）
+            const listenerVis = new THREE.Mesh(new THREE.BoxGeometry(1,1,1), new THREE.MeshBasicMaterial({color:0xffffff, wireframe:true}));
+            scene.add(listenerVis);
 
-            // 音源体
-            const geometry = new THREE.SphereGeometry(0.5, 64, 64);
-            const material = new THREE.MeshStandardMaterial({ color: 0x00d4ff, emissive: 0x00d4ff, emissiveIntensity: 2 });
-            mesh = new THREE.Mesh(geometry, material);
-            mesh.position.set(10, 2, 5);
+            // 音源
+            mesh = new THREE.Mesh(
+                new THREE.SphereGeometry(0.7, 32, 32),
+                new THREE.MeshStandardMaterial({ color: 0x00d4ff, emissive: 0x00d4ff })
+            );
+            mesh.position.set(10, 1, 0);
             scene.add(mesh);
+            mesh.add(new THREE.PointLight(0x00d4ff, 100, 20));
+            scene.add(new THREE.AmbientLight(0xffffff, 0.1));
 
-            const light = new THREE.PointLight(0x00d4ff, 500, 50);
-            mesh.add(light);
-
-            // --- 物理オーディオ設定 ---
+            // オーディオ設定
             const listener = new THREE.AudioListener();
             camera.add(listener);
 
-            // ドップラー効果を有効にするために速度を追跡
-            listener.context.listener.setOrientation(0,0,-1,0,1,0); 
-
             audio = new THREE.PositionalAudio(listener);
             
-            // Pannerの設定を極限までリアルに
-            const panner = audio.getPanner();
+            // エラー回避：pannerへのアクセスを確実にする
+            const panner = audio.panner; // getPanner()ではなくプロパティに直接アクセス
             panner.panningModel = 'HRTF';
             panner.distanceModel = 'inverse';
-            panner.refDistance = 0.5; // 音源に非常に近い時の解像度を上げる
-            panner.rolloffFactor = 1.5; // 離れた時の減衰を強調
-            panner.coneInnerAngle = 360; // 全方位に均一だが、HRTFで左右差を強調
+            panner.refDistance = 1;
+            panner.rolloffFactor = 2; // 減衰を強めに設定
 
             mesh.add(audio);
 
+            // 物理シミュ用ノード
             const ctx = listener.context;
-
-            // 1. 空気吸収フィルター (High-Shelf & Low-Pass)
             filterNode = ctx.createBiquadFilter();
             filterNode.type = 'lowpass';
 
-            // 2. インパルス応答による残響（よりリアルなアルゴリズム）
             reverbNode = ctx.createConvolver();
-            const sampleRate = ctx.sampleRate;
-            const length = sampleRate * 3;
-            const impulse = ctx.createBuffer(2, length, sampleRate);
-            for (let i = 0; i < 2; i++) {
-                const channel = impulse.getChannelData(i);
-                for (let j = 0; j < length; j++) {
-                    channel[j] = (Math.random() * 2 - 1) * Math.pow(1 - j / length, 2.5);
-                }
+            // インパルス応答（簡易残響）の生成
+            const irLen = ctx.sampleRate * 2;
+            const irBuf = ctx.createBuffer(2, irLen, ctx.sampleRate);
+            for(let c=0; c<2; c++) {
+                const data = irBuf.getChannelData(c);
+                for(let i=0; i<irLen; i++) data[i] = (Math.random()*2-1) * Math.pow(1 - i/irLen, 2);
             }
-            reverbNode.buffer = impulse;
+            reverbNode.buffer = irBuf;
 
             wetGain = ctx.createGain();
-            wetGain.gain.value = 0.25;
+            wetGain.gain.value = 0.2;
 
-            // ルーティング
-            setTimeout(() => {
-                const p = audio.panner;
-                p.disconnect();
-                p.connect(filterNode);
-                filterNode.connect(ctx.destination);
-                filterNode.connect(reverbNode);
-                reverbNode.connect(wetGain);
-                wetGain.connect(ctx.destination);
-            }, 100);
+            // 接続
+            panner.disconnect();
+            panner.connect(filterNode);
+            filterNode.connect(ctx.destination);
+            filterNode.connect(reverbNode);
+            reverbNode.connect(wetGain);
+            wetGain.connect(ctx.destination);
 
-            analyser = new THREE.AudioAnalyser(audio, 256);
-
-            // 操作
+            // コントロール
             oControls = new OrbitControls(camera, renderer.domElement);
-            oControls.enableDamping = true;
             dControls = new DragControls([mesh], camera, renderer.domElement);
             dControls.addEventListener('dragstart', () => oControls.enabled = false);
             dControls.addEventListener('dragend', () => oControls.enabled = true);
 
-            window.addEventListener('resize', onWindowResize);
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
         }
 
+        // ファイル読み込み処理
         document.getElementById('fileInput').addEventListener('change', (e) => {
             const file = e.target.files[0];
+            if(!file) return;
             const url = URL.createObjectURL(file);
-            new THREE.AudioLoader().load(url, (buffer) => {
+            const loader = new THREE.AudioLoader();
+            
+            document.getElementById('status').innerText = "Loading Audio...";
+            loader.load(url, (buffer) => {
                 audio.setBuffer(buffer);
                 audio.setLoop(true);
                 document.getElementById('playBtn').disabled = false;
-                document.getElementById('status').innerText = "ENGINE READY. READY TO BOOT.";
+                document.getElementById('status').innerText = "System Ready";
+                isReady = true;
             });
         });
 
         document.getElementById('playBtn').addEventListener('click', () => {
+            if (audio.context.state === 'suspended') audio.context.resume();
             if (audio.isPlaying) {
                 audio.pause();
-                document.getElementById('playBtn').innerText = "Boot Engine";
+                document.getElementById('playBtn').innerText = "START";
             } else {
                 audio.play();
-                document.getElementById('playBtn').innerText = "Shut Down";
-                document.getElementById('status').innerText = "System Live: Physics Emulation Active";
+                document.getElementById('playBtn').innerText = "STOP";
             }
         });
 
-        document.getElementById('reverbMix').addEventListener('input', (e) => {
-            wetGain.gain.setTargetAtTime(parseFloat(e.target.value), audio.context.currentTime, 0.1);
-        });
-
-        function onWindowResize() {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-        }
-
         function animate() {
             requestAnimationFrame(animate);
-            
-            if (audio && audio.isPlaying) {
-                // ドップラー効果の計算
-                const currentPos = mesh.position.clone();
-                const velocity = currentPos.clone().sub(lastPosition).multiplyScalar(60); // 1秒あたりの移動
-                lastPosition.copy(currentPos);
 
-                // Web Audio APIのドップラー効果を擬似再現（PlaybackRateで補正）
-                const relativeVelocity = velocity.dot(camera.position.clone().sub(mesh.position).normalize());
-                const speedOfSound = 343;
-                const dopplerShift = (speedOfSound) / (speedOfSound + relativeVelocity);
-                audio.setPlaybackRate(Math.max(0.5, Math.min(2.0, dopplerShift)));
-
-                // 距離による高域減衰
+            if (isReady && audio.isPlaying) {
                 const dist = mesh.position.distanceTo(camera.position);
-                const freq = Math.max(200, 20000 * Math.exp(-dist * 0.05));
-                filterNode.frequency.setTargetAtTime(freq, audio.context.currentTime, 0.1);
+                
+                // 1. 空気吸収（距離でこもる）
+                const cutoff = Math.max(200, 20000 * Math.exp(-dist * 0.05));
+                filterNode.frequency.setTargetAtTime(cutoff, audio.context.currentTime, 0.1);
 
-                // ビジュアライザー
-                const avg = analyser.getAverageFrequency();
-                const scale = 1 + (avg / 128);
-                mesh.scale.set(scale, scale, scale);
-                mesh.material.emissiveIntensity = 1 + (avg / 64);
+                // 2. ドップラー効果（ピッチ変化）
+                const v = mesh.position.clone().sub(lastPos).multiplyScalar(60);
+                const relV = v.dot(camera.position.clone().sub(mesh.position).normalize());
+                const shift = 343 / (343 + relV);
+                audio.setPlaybackRate(Math.max(0.7, Math.min(1.5, shift)));
+                lastPos.copy(mesh.position);
 
-                // ステータス表示
-                document.getElementById('status').innerText = `Dist: ${dist.toFixed(1)}m | Freq: ${Math.round(freq)}Hz | Shift: x${dopplerShift.toFixed(2)}`;
+                document.getElementById('status').innerText = `Dist: ${dist.toFixed(1)}m | Freq: ${Math.round(cutoff)}Hz`;
             }
 
             oControls.update();
