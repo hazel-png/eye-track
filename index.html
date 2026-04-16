@@ -3,46 +3,70 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>STAR BLADE '95 | Retro Spatial SHMUP</title>
+    <title>GALAXY FACE-OFF 1993</title>
     <style>
-        body { margin: 0; background: #000; overflow: hidden; font-family: 'Courier New', monospace; color: #fff; text-transform: uppercase; }
+        /* 90年代風テキストフォント（なければmonospace） */
+        @font-face {
+            font-family: 'RetroGaming';
+            src: url('https://fonts.cdnfonts.com/s/76662/PressStart2P-Regular.woff') format('woff');
+        }
+        body { margin: 0; background: #000; overflow: hidden; font-family: 'Press Start 2P', 'RetroGaming', monospace; color: #fff; user-select: none;}
         #container { position: absolute; inset: 0; }
         
-        /* 90s風レトロHUD */
-        #hud { position: absolute; inset: 0; pointer-events: none; z-index: 100; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; justify-content: space-between; }
-        .top-hud { display: flex; justify-content: space-between; font-size: 14px; color: #0f0; text-shadow: 0 0 5px #0f0; }
-        #score { color: #fff; }
-        
-        #warning { display: none; text-align: center; color: #f00; font-size: 30px; font-weight: bold; animation: blink 0.5s infinite; text-shadow: 0 0 10px #f00; }
-        
-        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
-        #webcam { display: none; }
+        /* HUD (Head-Up Display) */
+        #hud { 
+            position: absolute; top: 0; left: 0; width: 100%; padding: 20px; box-sizing: border-box;
+            display: flex; justify-content: space-between; z-index: 100; pointer-events: none;
+            text-shadow: 2px 2px #000;
+        }
+        .hud-val { color: #ff0; }
+        #hi-score { color: #f00; text-align: center; width: 100%; position: absolute; top: 20px; left: 0;}
 
-        /* 初期画面 */
-        #start-screen { position: absolute; inset: 0; background: #000; z-index: 200; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; }
-        #start-screen h1 { font-size: 40px; color: #0ff; text-shadow: 0 0 15px #0ff; margin-bottom: 5px; }
-        #start-screen p { color: #ff0; animation: blink 1s infinite; }
+        /* レティクル（照準） */
+        #reticle {
+            position: absolute; top: 50%; left: 50%; width: 40px; height: 40px;
+            border: 4px solid #f00; border-radius: 50%; transform: translate(-50%, -50%);
+            z-index: 200; pointer-events: none; box-sizing: border-box;
+        }
+        #reticle::before, #reticle::after {
+            content: ''; position: absolute; background: #f00;
+        }
+        #reticle::before { top: 50%; left: -10px; width: 60px; height: 4px; transform: translateY(-50%); }
+        #reticle::after { left: 50%; top: -10px; height: 60px; width: 4px; transform: translateX(-50%); }
+
+        #webcam { display: none; }
+        
+        /* タイトル画面 */
+        #title-screen {
+            position: absolute; inset: 0; background: #000; z-index: 300;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            border: 10px solid #00f; box-sizing: border-box;
+        }
+        #title-logo { font-size: 40px; color: #ff0; text-shadow: 4px 4px #f00; margin-bottom: 20px; text-align: center; }
+        #start-bt {
+            background: #f00; color: #fff; border: 4px solid #fff; padding: 15px 30px;
+            font-family: inherit; font-size: 20px; cursor: pointer;
+            animation: blink 1s infinite;
+        }
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
     </style>
 </head>
 <body>
 
-    <div id="start-screen">
-        <h1>STAR BLADE '95</h1>
-        <p>TILT HEAD TO MOVE. CLICK TO SHOOT.</p>
-        <p style="font-size: 10px; color: #aaa; margin-top: 20px;">[ CLICK TO START ]</p>
-    </div>
-
     <div id="hud">
-        <div class="top-hud">
-            <div>SCORE: <span id="score">000000</span></div>
-            <div>PLAYER: 1P</div>
-        </div>
-        <div id="warning">WARNING! <br> INCOMING ENEMIES</div>
-        <div style="text-align: center; color: #0ff; font-size: 10px;">90S RETRO-VISION ENABLED</div>
+        <div>SCORE: <span id="score" class="hud-val">0</span></div>
+        <div id="hi-score">HI: <span class="hud-val">10000</span></div>
+        <div>GAME-MODE: <span class="hud-val">FACE-AIM</span></div>
     </div>
-
+    <div id="reticle"></div>
     <div id="container"></div>
     <video id="webcam" autoplay playsinline></video>
+
+    <div id="title-screen">
+        <div id="title-logo">GALAXY<br>FACE-OFF<br>1993</div>
+        <div style="font-size:10px; margin-bottom:30px; color:#aaa;">MOVE FACE TO AIM & DODGE</div>
+        <button id="start-bt">PRESS START</button>
+    </div>
 
     <script type="importmap">
         {
@@ -56,79 +80,228 @@
         import * as THREE from 'three';
         import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3";
 
+        // --- ゲーム定数 ---
+        const GAME_SPEED = 0.2;
+        const ENEMY_SPAWN_RATE = 0.02; // 毎フレームの生成確率
+        const FIRE_RATE = 150; // 連射速度(ms)
+
         let scene, camera, renderer, faceLandmarker;
-        let playerGroup, laserSound;
         const video = document.getElementById('webcam');
-        const startScreen = document.getElementById('start-screen');
+        const hudScore = document.getElementById('score');
         
         // ゲーム状態
-        let gameState = { score: 0, playerX: 0, enemies: [], lasers: [], targetX: 0, isReady: false };
-        const hudScore = document.getElementById('score');
-        const hudWarning = document.getElementById('warning');
+        let gameState = 'TITLE';
+        let score = 0;
+        let lastFireTime = 0;
+        const enemies = [];
+        const bullets = [];
+        const particles = []; // 爆発
 
-        // --- ゲーム開始の儀式 ---
-        startScreen.addEventListener('click', () => {
-            startScreen.style.display = 'none';
-            initGame();
-        });
+        // 90s風爆発テクスチャ（ドット絵風のアニメーション画像）
+        // ※本来は画像ファイルが必要ですが、ここではTHREE.jsのCanvasTextureで代用
+        const createExplosionTexture = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = 32; canvas.height = 32;
+            const ctx = canvas.getContext('2d');
+            // 黄色と赤のドット爆発
+            ctx.fillStyle = '#ff0'; ctx.fillRect(8, 8, 16, 16);
+            ctx.fillStyle = '#f00'; ctx.fillRect(12, 12, 8, 8);
+            ctx.fillStyle = '#fff'; ctx.fillRect(14, 14, 4, 4);
+            return new THREE.CanvasTexture(canvas);
+        };
+        const explosionTexture = createExplosionTexture();
 
-        async function initGame() {
-            // --- Scene Setup (90s Retro Config) ---
+        // 物理パラメータ（直接レスポンス・ゴム感なし）
+        const physics = {
+            shipPos: new THREE.Vector3(0, -4, 0), // 自機画面内移動
+            aimRot: new THREE.Vector2(0, 0),    // 照準（カメラ角度）
+            velP: new THREE.Vector3(), velR: new THREE.Vector2(),
+            stiffness: 0.5, damping: 0.4 // キビキビ動く設定
+        };
+
+        // --- ゲームオブジェクト群 ---
+        let playerShip, targetPoint, raycaster;
+
+        async function init() {
             scene = new THREE.Scene();
-            // 90s定番の「濃いフォグ（霧）」で描画距離をごまかす
-            scene.fog = new THREE.Fog(0x000000, 15, 30); 
-
-            // FOVを少し広めにしてスピード感を出す
+            scene.fog = new THREE.Fog(0x000033, 20, 50); // ネイビーの霧
             camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
-            camera.position.set(0, 2, 10);
-            camera.lookAt(0, 0, -5);
-
-            renderer = new THREE.WebGLRenderer({ antialias: false }); // あえてアンチエイリアスOFFでジャギーを出す
+            
+            renderer = new THREE.WebGLRenderer({ antialias: false }); // レトロにするためアンチエイリアスOFF
             renderer.setSize(window.innerWidth, window.innerHeight);
-            // 解像度をあえて下げる（Pixel Ratioを低く設定）
-            renderer.setPixelRatio(0.8); 
+            renderer.setPixelRatio(1); // 解像度をあえて荒く
             document.getElementById('container').appendChild(renderer.domElement);
 
-            // --- 視覚的要素（90sグラフィック） ---
-            // レトロなカラーグリッドの床
-            const gridHelper = new THREE.GridHelper(100, 20, 0x00ff00, 0x330033);
-            gridHelper.position.y = -1;
-            scene.add(gridHelper);
+            raycaster = new THREE.Raycaster(); // 照準用
 
-            // ワイヤーフレームの背景
-            const bgGeometry = new THREE.IcosahedronGeometry(40, 1);
-            const bgMaterial = new THREE.MeshBasicMaterial({ color: 0x220022, wireframe: true, side: THREE.BackSide });
-            scene.add(new THREE.Mesh(bgGeometry, bgMaterial));
+            // 1. 宇宙環境
+            // スターフィールド（点ではなく、粗いポリゴンの星）
+            for (let i = 0; i < 200; i++) {
+                const star = new THREE.Mesh(
+                    new THREE.BoxGeometry(0.1, 0.1, 0.1),
+                    new THREE.MeshBasicMaterial({ color: 0xffffff })
+                );
+                star.position.set((Math.random()-0.5)*100, (Math.random()-0.5)*100, (Math.random()-0.5)*100);
+                scene.add(star);
+            }
 
-            // --- 自機（プレイヤー）の構築 ---
-            playerGroup = new THREE.Group();
-            const bodyGeo = new THREE.ConeGeometry(0.5, 1.5, 4); // 粗いポリゴン
-            const bodyMat = new THREE.MeshBasicMaterial({ color: 0x00ffff, wireframe: true });
-            const body = new THREE.Mesh(bodyGeo, bodyMat);
-            body.rotation.x = Math.PI / 2; // 寝かせる
-            playerGroup.add(body);
-            scene.add(playerGroup);
+            // 2. 自機（ローポリゴン・Star Fox風）
+            const shipGeometry = new THREE.ConeGeometry(0.5, 2, 4); // 4角錐
+            shipGeometry.rotateX(Math.PI / 2); // 前を向ける
+            const shipMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000, wireframe: false });
+            // 90sフラットシェーディング効果（MeshLambert + FlatShadingが正解だがBasicで単純化）
+            playerShip = new THREE.Mesh(shipGeometry, shipMaterial);
+            playerShip.position.copy(physics.shipPos);
+            scene.add(playerShip);
 
-            // オーディオ（音が出ないブラウザ向けの保険）
-            const listener = new THREE.AudioListener();
-            camera.add(listener);
+            // 照準のターゲット点（画面奥）
+            targetPoint = new THREE.Object3D();
+            targetPoint.position.set(0, 0, -20);
+            scene.add(targetPoint);
 
             await setupTracking();
-            gameState.isReady = true;
-            animate();
+            // animateはスタートボタン押下後に開始
         }
 
+        // --- ゲームロジック ---
+
+        // 敵機の生成（ローポリ・悪役カラー）
+        function spawnEnemy() {
+            const geometry = new THREE.OctahedronGeometry(1, 0); // 8面体（カクカク）
+            const material = new THREE.MeshBasicMaterial({ color: 0x00ff00, wireframe: false });
+            const enemy = new THREE.Mesh(geometry, material);
+            // 画面奥のランダム位置
+            enemy.position.set((Math.random()-0.5)*30, (Math.random()-0.5)*20, -50);
+            scene.add(enemy);
+            enemies.push(enemy);
+        }
+
+        // ビーム発射（赤い線）
+        function fireBeam() {
+            const geometry = new THREE.BoxGeometry(0.1, 0.1, 5);
+            const material = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+            const beam = new THREE.Mesh(geometry, material);
+            // 自機の位置から発射
+            beam.position.copy(playerShip.position);
+            // 照準の方向へ向ける
+            beam.lookAt(raycaster.ray.direction.clone().multiplyScalar(100).add(camera.position));
+            scene.add(beam);
+            bullets.push(beam);
+        }
+
+        // 爆発エフェクト（90s風ドットスプライト）
+        function createExplosion(pos) {
+            const material = new THREE.PointsMaterial({
+                size: 2, color: 0xffffff, map: explosionTexture, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false
+            });
+            const points = new THREE.Points(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute([0,0,0], 3)), material);
+            points.position.copy(pos);
+            scene.add(points);
+            particles.push({ mesh: points, life: 1.0 }); // Life 1.0 -> 0.0で消滅
+        }
+
+        // --- メインループ ---
+        function animate() {
+            if (gameState !== 'PLAYING') return; // タイトル画面中は動かさない
+            requestAnimationFrame(animate);
+
+            // 1. 物理シミュレーション（キビキビ追従）
+            // 自機位置
+            let forceP = new THREE.Vector3().subVectors(targetPos, physics.pos).multiplyScalar(physics.stiffness);
+            physics.vel velP.add(forceP).multiplyScalar(physics.damping);
+            physics.pos shipPos.add(physics.vel velP);
+            
+            // 照準角度
+            let forceR = new THREE.Vector2().subVectors(targetRot, physics.rot aimRot).multiplyScalar(physics.stiffness);
+            physics.vel rotVel.add(forceR).multiplyScalar(physics.damping);
+            physics.rot aimRot.add(physics.vel rotVel);
+
+            // 2. カメラと自機の更新
+            camera.rotation.set(physics.rot aimRot.x, physics.rot aimRot.y, 0, 'XYZ');
+            
+            // 自機は画面下部に固定しつつ、顔の動きで少し左右上下に動かす（覗き込み）
+            playerShip.position.set(physics.pos shipPos.x * 0.2, -4 + physics.pos shipPos.y * 0.1, 0);
+
+            // 照準レイキャスターの更新（画面中央固定）
+            raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+
+            // 3. ゲーム・アルゴリズム
+            // 敵生成
+            if (Math.random() < ENEMY_SPAWN_RATE) spawnEnemy();
+
+            // 敵の移動と照準チェック
+            raycaster.far = 60; // 照準の届く距離
+            const aimIntersects = raycaster.intersectObjects(enemies);
+            const isAimingEnemy = aimIntersects.length > 0;
+            
+            // レティクルの色を変える（90s風演出）
+            document.getElementById('reticle').style.borderColor = isAimingEnemy ? '#ff0' : '#f00';
+            document.getElementById('reticle').style.opacity = isAimingEnemy ? 1 : 0.7;
+
+            // オートショット（照準が合っていて連射時間が過ぎていたら）
+            const now = performance.now();
+            if (isAimingEnemy && now - lastFireTime > FIRE_RATE) {
+                fireBeam();
+                lastFireTime = now;
+            }
+
+            // 敵の更新（直進、消滅）
+            for (let i = enemies.length - 1; i >= 0; i--) {
+                enemies[i].position.z += GAME_SPEED * 2; // 手前に進む
+                // 画面外（カメラの後ろ）に行ったら消滅
+                if (enemies[i].position.z > 5) {
+                    scene.remove(enemies[i]);
+                    enemies.splice(i, 1);
+                }
+            }
+
+            // 弾の更新（直進、ヒット判定）
+            for (let i = bullets.length - 1; i >= 0; i--) {
+                bullets[i].translateZ(-GAME_SPEED * 10); // 奥へ進む
+                
+                // 敵とのコリジョン（90s的な単純な距離判定）
+                for (let j = enemies.length - 1; j >= 0; j--) {
+                    if (bullets[i].position.distanceTo(enemies[j].position) < 1.5) {
+                        // ヒット！
+                        createExplosion(enemies[j].position);
+                        scene.remove(enemies[j]); scene.remove(bullets[i]);
+                        enemies.splice(j, 1); bullets.splice(i, 1);
+                        score += 100; hudScore.innerText = score;
+                        break; // この弾の処理は終了
+                    }
+                }
+                // 画面奥に行ったら消滅
+                if (bullets[i] && bullets[i].position.z < -60) {
+                    scene.remove(bullets[i]); bullets.splice(i, 1);
+                }
+            }
+
+            // 爆発アニメーション（lifeを減らして消滅）
+            for (let i = particles.length - 1; i >= 0; i--) {
+                particles[i].life -= 0.1; // 10フレームで消滅
+                particles[i].mesh.material.size = particles[i].life * 4; // 段々小さく
+                if (particles[i].life <= 0) {
+                    scene.remove(particles[i].mesh); particles.splice(i, 1);
+                }
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // --- トラッキング設定 ---
+        // predict内で更新するターゲット値
+        let targetPos = new THREE.Vector3(0,0,0);
+        let targetRot = new THREE.Vector2(0,0);
+
         async function setupTracking() {
-            try {
-                const res = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm");
-                faceLandmarker = await FaceLandmarker.createFromOptions(res, {
-                    baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task", delegate: "GPU" },
-                    runningMode: "VIDEO", numFaces: 1
-                });
-                const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
-                video.srcObject = stream;
-                video.onloadedmetadata = () => { video.play(); predict(); };
-            } catch (e) { console.error(e); }
+            const res = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm");
+            faceLandmarker = await FaceLandmarker.createFromOptions(res, {
+                baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task", delegate: "GPU" },
+                runningMode: "VIDEO", numFaces: 1
+            });
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+            video.srcObject = stream;
+            video.onloadedmetadata = () => { video.play(); predict(); };
         }
 
         function predict() {
@@ -136,97 +309,35 @@
                 const results = faceLandmarker.detectForVideo(video, performance.now());
                 if (results.faceLandmarks?.[0]) {
                     const lm = results.faceLandmarks[0];
-                    // 顔の傾き（左右）を取得して自機の目標位置にする
                     const headX = (lm[234].x + lm[454].x) / 2;
-                    gameState.targetX = (0.5 - headX) * 15; // 左右の移動量
+                    const headY = (lm[234].y + lm[454].y) / 2;
+                    const faceWidth = Math.abs(lm[454].x - lm[234].x);
+
+                    // 1. 位置移動（控えめ・リアルスケール）
+                    targetPos.x = (0.5 - headX) * 10; 
+                    targetPos.y = (0.5 - headY) * 6;
+                    // 2. 照準角度（ Yaw/Pitch・感度高め）
+                    targetRot.y = (lm[1].x - headX) * 7.0; 
+                    targetRot.x = (headY - lm[1].y) * 5.5;
                 }
             }
             requestAnimationFrame(predict);
         }
 
-        // --- ゲームループ（アニメーション） ---
-        function animate() {
-            if (!gameState.isReady) return;
-            requestAnimationFrame(animate);
-
-            // 1. プレイヤーの移動（物理慣性を適用）
-            playerGroup.position.x += (gameState.targetX - playerGroup.position.x) * 0.1;
-            // 傾き演出（レトロ格闘ゲーム風）
-            playerGroup.rotation.z = (playerGroup.position.x - gameState.targetX) * 0.1;
-
-            // 2. 敵（キューブ）の生成と移動
-            if (Math.random() < 0.05) { // 生成確率
-                const geometry = new THREE.BoxGeometry(1, 1, 1);
-                // 粗いテクスチャ風のMeshBasicMaterial
-                const material = new THREE.MeshBasicMaterial({ color: Math.random() < 0.5 ? 0xff0000 : 0x0000ff, wireframe: Math.random() < 0.3 });
-                const enemy = new THREE.Mesh(geometry, material);
-                enemy.position.set((Math.random() - 0.5) * 20, Math.random() * 5, -30);
-                scene.add(enemy);
-                gameState.enemies.push(enemy);
-            }
-
-            gameState.enemies.forEach((enemy, index) => {
-                enemy.position.z += 0.5; // 奥から手前へ移動
-                enemy.rotation.x += 0.02; enemy.rotation.y += 0.02;
-
-                // プレイヤーを通り過ぎたら削除
-                if (enemy.position.z > 15) {
-                    scene.remove(enemy);
-                    gameState.enemies.splice(index, 1);
-                }
-            });
-
-            // 3. レーザーの移動と当たり判定
-            gameState.lasers.forEach((laser, lIndex) => {
-                laser.position.z -= 1.0; // 手前から奥へ（速い）
-
-                // 敵との当たり判定（シンプル）
-                gameState.enemies.forEach((enemy, eIndex) => {
-                    if (laser.position.distanceTo(enemy.position) < 1.5) {
-                        // 爆発（粗い表現として削除）
-                        scene.remove(enemy);
-                        gameState.enemies.splice(eIndex, 1);
-                        scene.remove(laser);
-                        gameState.lasers.splice(lIndex, 1);
-                        
-                        // スコア加算
-                        gameState.score += 100;
-                        hudScore.innerText = String(gameState.score).padStart(6, '0');
-                    }
-                });
-
-                // 遠くに行ったら削除
-                if (laser.position.z < -40) {
-                    scene.remove(laser);
-                    gameState.lasers.splice(lIndex, 1);
-                }
-            });
-
-            // WARNINGの表示制御
-            hudWarning.style.display = gameState.enemies.length > 5 ? 'block' : 'none';
-
-            renderer.render(scene, camera);
-        }
-
-        // --- クリックでショット（レーザー発射） ---
-        window.addEventListener('click', () => {
-            if (!gameState.isReady) return;
-            
-            const geometry = new THREE.CylinderGeometry(0.05, 0.05, 2, 4); // 粗いポリゴン
-            const material = new THREE.MeshBasicMaterial({ color: 0xff00f2 });
-            const laser = new THREE.Mesh(geometry, material);
-            laser.rotation.x = Math.PI / 2; // 横にする
-            laser.position.set(playerGroup.position.x, playerGroup.position.y, playerGroup.position.z);
-            scene.add(laser);
-            gameState.lasers.push(laser);
+        // --- UIイベント ---
+        document.getElementById('start-bt').addEventListener('click', () => {
+            document.getElementById('title-screen').style.display = 'none';
+            gameState = 'PLAYING';
+            // ゲームループ開始
+            animate();
         });
 
         window.addEventListener('resize', () => {
-            if (!gameState.isReady) return;
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
+            camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
         });
+
+        init();
     </script>
 </body>
 </html>
