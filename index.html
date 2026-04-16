@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Realistic Spatial View | 1:1 Scale</title>
+    <title>Hybrid Spatial View | Fixed Rotation</title>
     <style>
         body { margin: 0; background: #000; overflow: hidden; font-family: 'Consolas', monospace; }
         #container { position: absolute; inset: 0; }
@@ -20,10 +20,9 @@
 <body>
 
     <div id="hud">
-        <div style="font-weight: bold; margin-bottom: 8px; color: #ff00f2;">REAL-SCALE TRACKING</div>
-        <div><span class="label">POS-X:</span><span id="v-px" class="val">0.0</span></div>
-        <div><span class="label">YAW:</span><span id="v-ry" class="val">0.0</span></div>
-        <div style="margin-top: 8px; font-size: 9px; opacity: 0.7;">※移動量を現実の物理法則に同期中</div>
+        <div style="font-weight: bold; margin-bottom: 8px; color: #ff00f2;">HYBRID TRACKING</div>
+        <div><span class="label">MOVE SCALE:</span><span class="val">REAL (1:1)</span></div>
+        <div><span class="label">ROT SCALE:</span><span class="val">WIDE (PREVIOUS)</span></div>
     </div>
     <div id="container"></div>
     <video id="webcam" autoplay playsinline></video>
@@ -43,7 +42,6 @@
         let scene, camera, renderer, faceLandmarker;
         const video = document.getElementById('webcam');
 
-        // --- 物理パラメータ（抑制版） ---
         const physics = {
             pos: new THREE.Vector3(0, 0, 10),
             vel: new THREE.Vector3(0, 0, 0),
@@ -53,41 +51,40 @@
             targetPos: new THREE.Vector3(0, 0, 10),
             targetRot: new THREE.Vector2(0, 0),
 
-            stiffness: 0.15, // 追従の強さ
-            damping: 0.8,    // 減衰（重厚感）
-            jitter: 0.0008   // ノイズ（より微細に）
+            stiffness: 0.18, 
+            damping: 0.75,   
+            jitter: 0.001   
         };
 
         async function init() {
             scene = new THREE.Scene();
-            scene.fog = new THREE.FogExp2(0x00050a, 0.04);
+            scene.fog = new THREE.FogExp2(0x00050a, 0.03);
 
-            // FOVを45度に絞ることで周辺の歪みを防ぐ
-            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 1000);
             
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.setPixelRatio(window.devicePixelRatio);
             document.getElementById('container').appendChild(renderer.domElement);
 
-            // 奥行きを強調するための構造
             const grid = new THREE.GridHelper(100, 40, 0x00f2ff, 0x001122);
-            grid.position.y = -5;
+            grid.position.y = -6;
             scene.add(grid);
 
-            // 基準となる中心のオブジェクト
-            const centerCore = new THREE.Mesh(
+            // 基準となる中心オブジェクト
+            const core = new THREE.Mesh(
                 new THREE.IcosahedronGeometry(1.5, 1),
                 new THREE.MeshBasicMaterial({ color: 0x00f2ff, wireframe: true })
             );
-            scene.add(centerCore);
+            scene.add(core);
 
-            for (let i = 0; i < 40; i++) {
+            // 周囲の浮遊オブジェクト
+            for (let i = 0; i < 50; i++) {
                 const cube = new THREE.Mesh(
-                    new THREE.BoxGeometry(0.3, 0.3, 0.3),
-                    new THREE.MeshBasicMaterial({ color: 0x00f2ff, wireframe: true, opacity: 0.5, transparent: true })
+                    new THREE.BoxGeometry(0.4, 0.4, 0.4),
+                    new THREE.MeshBasicMaterial({ color: 0x00f2ff, wireframe: true, transparent: true, opacity: 0.6 })
                 );
-                cube.position.set((Math.random()-0.5)*40, (Math.random()-0.5)*20, (Math.random()-0.5)*40 - 10);
+                cube.position.set((Math.random()-0.5)*50, (Math.random()-0.5)*30, (Math.random()-0.5)*50 - 5);
                 scene.add(cube);
             }
 
@@ -118,17 +115,14 @@
                     const headY = (lm[234].y + lm[454].y) / 2;
                     const faceWidth = Math.abs(lm[454].x - lm[234].x);
 
-                    // --- 係数を大幅に抑制 (リアルスケール) ---
+                    // 1. 位置移動は抑制（リアルスケール）
                     physics.targetPos.x = (0.5 - headX) * 8; 
-                    physics.targetPos.y = (0.5 - headY) * 5;
-                    physics.targetPos.z = (0.15 / faceWidth) * 4 + 7;
+                    physics.targetPos.y = (0.5 - headY) * 6;
+                    physics.targetPos.z = (0.15 / faceWidth) * 5 + 8;
 
-                    // 回転の感度をさらに下げる
-                    physics.targetRot.y = (lm[1].x - headX) * 2.0;
-                    physics.targetRot.x = (headY - lm[1].y) * 1.5;
-
-                    document.getElementById('v-px').innerText = physics.targetPos.x.toFixed(2);
-                    document.getElementById('v-ry').innerText = physics.targetRot.y.toFixed(2);
+                    // 2. 回転（見回し）は感度を戻す（以前の5〜6倍設定）
+                    physics.targetRot.y = (lm[1].x - headX) * 6.5; 
+                    physics.targetRot.x = (headY - lm[1].y) * 5.0;
                 }
             }
             requestAnimationFrame(predict);
@@ -137,7 +131,7 @@
         function animate() {
             requestAnimationFrame(animate);
 
-            // 物理演算
+            // 物理演算（バネ）
             let forceP = new THREE.Vector3().subVectors(physics.targetPos, physics.pos).multiplyScalar(physics.stiffness);
             physics.vel.add(forceP).multiplyScalar(physics.damping);
             physics.pos.add(physics.vel);
@@ -146,7 +140,7 @@
             physics.rotVel.add(forceR).multiplyScalar(physics.damping);
             physics.rot.add(physics.rotVel);
 
-            // 微細ノイズ
+            // 微細ジッター
             const jX = (Math.random() - 0.5) * physics.jitter;
             const jY = (Math.random() - 0.5) * physics.jitter;
 
