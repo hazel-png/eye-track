@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>The Physics of Sound</title>
+    <title>The Physics of Sound - Fixed</title>
     <style>
         :root { --gold: #d4af37; --bg: #000; --cyan: #00f2ff; }
         body {
@@ -14,10 +14,11 @@
         .ui-panel {
             margin-top: 20px; background: #0a0a0a; border: 1px solid #222;
             padding: 20px; border-radius: 20px; box-shadow: 0 0 40px rgba(0,0,0,1);
+            width: 320px;
         }
         .grid {
-            position: relative; width: 300px; height: 300px; background: #050505;
-            border: 1px solid #333; overflow: hidden; margin: 10px 0;
+            position: relative; width: 100%; height: 300px; background: #050505;
+            border: 1px solid #333; overflow: hidden; margin: 10px 0; border-radius: 10px;
         }
         .mesh {
             position: absolute; width: 100%; height: 100%;
@@ -26,26 +27,29 @@
             background-size: 20px 20px;
         }
         .node {
-            position: absolute; width: 16px; height: 16px; background: var(--gold);
+            position: absolute; width: 18px; height: 18px; background: var(--gold);
             border-radius: 50%; transform: translate(-50%, -50%);
-            box-shadow: 0 0 20px var(--gold); z-index: 10;
+            box-shadow: 0 0 20px var(--gold); z-index: 10; pointer-events: none;
         }
         .head {
             position: absolute; top: 50%; left: 50%; width: 10px; height: 10px;
             background: var(--cyan); border-radius: 50%; transform: translate(-50%, -50%);
+            box-shadow: 0 0 10px var(--cyan);
         }
-        .status { font-family: monospace; font-size: 0.65rem; color: var(--gold); margin-bottom: 10px; }
-        .controls { display: flex; gap: 10px; margin-top: 10px; }
-        button, label {
-            font-size: 0.6rem; border: 1px solid #444; color: #888;
-            padding: 8px 15px; border-radius: 5px; cursor: pointer; background: none;
+        .status { font-family: monospace; font-size: 0.65rem; color: var(--gold); margin-bottom: 10px; text-align: center;}
+        .controls { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+        button, .upload-label {
+            font-size: 0.7rem; border: 1px solid #444; color: #ccc;
+            padding: 10px; border-radius: 5px; cursor: pointer; background: #111;
+            text-align: center; display: block;
         }
+        .upload-label:hover { border-color: var(--gold); color: white; }
     </style>
 </head>
 <body>
 
 <div class="ui-panel">
-    <div class="status" id="readout">PHYSICS ENGINE: READY</div>
+    <div class="status" id="readout">SYSTEM: READY - LOAD AUDIO</div>
     
     <div class="grid" id="gridXZ">
         <div class="mesh"></div>
@@ -53,44 +57,51 @@
         <div id="nodeXZ" class="node" style="top:50%; left:50%;"></div>
     </div>
 
-    <div class="grid" id="gridY" style="height: 100px;">
+    <div class="grid" id="gridY" style="height: 120px;">
         <div class="mesh"></div>
         <div class="head"></div>
         <div id="nodeY" class="node" style="top:50%; left:50%;"></div>
     </div>
 
     <div class="controls">
-        <label for="file">LOAD SOURCE</label>
+        <label class="upload-label" for="file">LOAD MASTER SOURCE</label>
         <input type="file" id="file" hidden accept="audio/*">
-        <button onclick="resetPos()">RESET POS</button>
+        <button onclick="resetPos()">RESET POSITION</button>
     </div>
 </div>
 
 <script>
     let audioCtx, panner, source, mainFilter, rearFilter, reverbNode;
     let coord = { x: 0, y: 0, z: 0 };
+    let isInitialized = false;
 
+    // --- 音響エンジンの初期化 ---
     async function setupAudio(file) {
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (!audioCtx) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
         
-        // 1. Panner (ドップラー効果を有効にするためPanningModelをHRTFに)
+        // 再初期化に備えて既存のソースを停止
+        if (source) source.stop();
+
+        // 1. Panner (HRTF)
         panner = audioCtx.createPanner();
         panner.panningModel = 'HRTF';
         panner.distanceModel = 'inverse';
 
-        // 2. メインフィルタ（距離減衰用）
+        // 2. Main Filter (空気吸収)
         mainFilter = audioCtx.createBiquadFilter();
         mainFilter.type = 'lowpass';
 
-        // 3. リアフィルタ（後ろに回った時の遮蔽用）
+        // 3. Rear Filter (遮蔽)
         rearFilter = audioCtx.createBiquadFilter();
         rearFilter.type = 'peaking';
-        rearFilter.frequency.value = 10000; // 10kHz付近
+        rearFilter.frequency.value = 10000;
         rearFilter.Q.value = 1;
 
-        // 4. ルームアコースティクス (簡易リバーブ)
+        // 4. Reverb (物理合成)
         reverbNode = audioCtx.createConvolver();
-        const duration = 1.5; // 1.5秒の残響
+        const duration = 1.5;
         const rate = audioCtx.sampleRate;
         const length = rate * duration;
         const impulse = audioCtx.createBuffer(2, length, rate);
@@ -109,10 +120,8 @@
         source.buffer = audioData;
         source.loop = true;
 
-        // 接続経路: Source -> MainFilter -> RearFilter -> Panner -> Destination
-        // 同時に Source -> Reverb -> Destination (ウェット音)
         const reverbGain = audioCtx.createGain();
-        reverbGain.gain.value = 0.15; // 残響の強さ
+        reverbGain.gain.value = 0.12;
 
         source.connect(mainFilter);
         mainFilter.connect(rearFilter);
@@ -124,64 +133,90 @@
         reverbGain.connect(audioCtx.destination);
 
         source.start();
+        isInitialized = true;
         render();
     }
 
+    // --- ループ処理 ---
     function render() {
-        if (!panner) return;
+        if (!isInitialized || !panner) return;
+        
         const now = audioCtx.currentTime;
-        const scale = 30;
+        const scale = 25; // 空間の広さ
         
         const rx = coord.x * scale;
         const ry = coord.y * scale;
         const rz = coord.z * scale;
 
-        // ドップラー効果を狙うため少し速めに追従 (0.05s)
+        // 音源位置の更新 (ドップラー効果のための追従)
         panner.positionX.setTargetAtTime(rx, now, 0.05);
         panner.positionY.setTargetAtTime(ry, now, 0.05);
         panner.positionZ.setTargetAtTime(rz, now, 0.05);
 
-        // 距離による高域減衰 (空気吸収)
+        // 物理シミュレーション：距離による高域遮断
         const dist = Math.sqrt(rx*rx + ry*ry + rz*rz);
-        mainFilter.frequency.setTargetAtTime(Math.max(1000, 20000 - dist * 500), now, 0.1);
+        mainFilter.frequency.setTargetAtTime(Math.max(1500, 20000 - dist * 600), now, 0.1);
 
-        // 【新】耳の裏側の再現
-        // 真後ろ(Z > 0)にいくほど 10kHz をカットする
+        // 物理シミュレーション：背後への回り込み（10kHzの減衰）
         const rearIntensity = Math.max(0, Math.min(1, rz / 10)); 
-        rearFilter.gain.setTargetAtTime(rearIntensity * -15, now, 0.1);
+        rearFilter.gain.setTargetAtTime(rearIntensity * -18, now, 0.1);
 
-        // UI更新
-        document.getElementById('nodeXZ').style.left = ((coord.x+1)/2*100)+'%';
-        document.getElementById('nodeXZ').style.top = ((coord.z+1)/2*100)+'%';
-        document.getElementById('nodeY').style.left = ((coord.x+1)/2*100)+'%';
-        document.getElementById('nodeY').style.top = ((-coord.y+1)/2*100)+'%';
+        // UIの座標同期（全グリッドの黄色い丸を動かす）
+        document.getElementById('nodeXZ').style.left = ((coord.x + 1) / 2 * 100) + '%';
+        document.getElementById('nodeXZ').style.top = ((coord.z + 1) / 2 * 100) + '%';
+        document.getElementById('nodeY').style.left = ((coord.x + 1) / 2 * 100) + '%';
+        document.getElementById('nodeY').style.top = ((-coord.y + 1) / 2 * 100) + '%';
         
-        document.getElementById('readout').innerText = `X:${rx.toFixed(1)} Y:${ry.toFixed(1)} Z:${rz.toFixed(1)} | DOPPLER: ON`;
+        document.getElementById('readout').innerText = `X:${rx.toFixed(1)} Y:${ry.toFixed(1)} Z:${rz.toFixed(1)} | PHYS: ACTIVE`;
         requestAnimationFrame(render);
     }
 
-    function handleInput(id, type) {
-        const grid = document.getElementById(id);
+    // --- 入力イベント (スマホ対応強化) ---
+    function handleInput(gridId, type) {
+        const grid = document.getElementById(gridId);
         let active = false;
-        const update = (e) => {
-            if(!active) return;
+
+        const updateCoord = (e) => {
+            if (!active) return;
             const r = grid.getBoundingClientRect();
             const t = e.touches ? e.touches[0] : e;
             const nx = (t.clientX - r.left) / r.width * 2 - 1;
             const ny = (t.clientY - r.top) / r.height * 2 - 1;
+
             coord.x = Math.max(-1, Math.min(1, nx));
-            if(type === 'XZ') coord.z = Math.max(-1, Math.min(1, ny));
-            else coord.y = -Math.max(-1, Math.min(1, ny));
+            if (type === 'XZ') {
+                coord.z = Math.max(-1, Math.min(1, ny));
+            } else {
+                coord.y = -Math.max(-1, Math.min(1, ny));
+            }
         };
-        grid.onmousedown = grid.ontouchstart = () => { active = true; audioCtx?.resume(); };
-        window.onmousemove = window.ontouchmove = update;
-        window.onmouseup = window.ontouchend = () => active = false;
+
+        const onStart = (e) => {
+            active = true;
+            if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+            updateCoord(e);
+        };
+
+        grid.addEventListener('mousedown', onStart);
+        grid.addEventListener('touchstart', (e) => { e.preventDefault(); onStart(e); }, { passive: false });
+        
+        window.addEventListener('mousemove', updateCoord);
+        window.addEventListener('touchmove', (e) => { if(active) e.preventDefault(); updateCoord(e); }, { passive: false });
+        
+        window.addEventListener('mouseup', () => active = false);
+        window.addEventListener('touchend', () => active = false);
     }
 
     handleInput('gridXZ', 'XZ');
     handleInput('gridY', 'Y');
-    document.getElementById('file').onchange = (e) => setupAudio(e.target.files[0]);
-    function resetPos() { coord = {x:0, y:0, z:0}; }
+
+    document.getElementById('file').onchange = (e) => {
+        if (e.target.files[0]) setupAudio(e.target.files[0]);
+    };
+
+    function resetPos() {
+        coord = { x: 0, y: 0, z: 0 };
+    }
 </script>
 </body>
 </html>
