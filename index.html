@@ -2,53 +2,63 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>タイマー式・アイトラッキング校正</title>
+    <title>Vision Pro Style Calibration</title>
     <style>
-        body { margin: 0; background: #000; overflow: hidden; font-family: sans-serif; color: white; }
+        body { margin: 0; background: #000; overflow: hidden; font-family: "Helvetica Neue", Arial, sans-serif; color: #fff; }
         
-        /* 視線のドット */
+        /* 視線の赤い点は極限まで小さく、または隠す（Vision Pro風なら見えない方が没入感が出ます） */
         #webgazerGazeDot {
-            width: 10px !important; height: 10px !important;
-            background: #ff3b30 !important; border: none !important;
-            z-index: 10001 !important;
+            width: 4px !important; height: 4px !important;
+            background: rgba(255, 255, 255, 0.5) !important; border: none !important;
         }
 
-        /* タイマーターゲット */
-        #target {
-            position: absolute; width: 50px; height: 50px;
-            background: none; border: 3px solid #fff; border-radius: 50%;
-            transform: translate(-50%, -50%); display: none; z-index: 10000;
+        /* 光るドットの外枠 */
+        #target-container {
+            position: absolute; width: 60px; height: 60px;
+            transform: translate(-50%, -50%);
+            transition: opacity 0.6s ease-in-out, left 0.6s cubic-bezier(0.4, 0, 0.2, 1), top 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+            opacity: 0; display: flex; align-items: center; justify-content: center;
         }
-        
-        /* タイマーのプログレス（中心の点） */
-        #target::after {
-            content: ""; position: absolute; top: 50%; left: 50%;
-            width: 10px; height: 10px; background: #fff;
-            border-radius: 50%; transform: translate(-50%, -50%);
+
+        /* 中心の発光ドット */
+        #target-core {
+            width: 12px; height: 12px; background: #fff; border-radius: 50%;
+            box-shadow: 0 0 20px 5px rgba(255, 255, 255, 0.8);
+        }
+
+        /* タイマーリング */
+        #timer-ring {
+            position: absolute; width: 50px; height: 50px;
+            border: 2px solid rgba(255, 255, 255, 0.3); border-radius: 50%;
         }
 
         #msg {
-            position: fixed; width: 100%; text-align: center;
-            top: 45%; font-size: 1.5rem; pointer-events: none;
+            position: fixed; width: 100%; text-align: center; bottom: 15%;
+            font-size: 1.2rem; font-weight: 200; letter-spacing: 0.1em;
+            transition: opacity 1s; opacity: 0.8;
         }
     </style>
 </head>
 <body>
 
-<div id="msg">カメラを起動中...</div>
-<div id="target"></div>
+<div id="msg">カメラをセットアップ中...</div>
+<div id="target-container">
+    <div id="timer-ring"></div>
+    <div id="target-core"></div>
+</div>
 
 <script src="https://cdn.jsdelivr.net/npm/webgazer@2.1.0/dist/webgazer.js"></script>
 
 <script>
-    const target = document.getElementById('target');
+    const container = document.getElementById('target-container');
     const msg = document.getElementById('msg');
     
-    // 校正ポイント（全9箇所）
+    // Vision Pro風の6点＋中央の配置
     const points = [
-        {x: 10, y: 10}, {x: 50, y: 10}, {x: 90, y: 10},
-        {x: 10, y: 50}, {x: 50, y: 50}, {x: 90, y: 50},
-        {x: 10, y: 90}, {x: 50, y: 90}, {x: 90, y: 90}
+        {x: 50, y: 50}, // Center
+        {x: 20, y: 25}, {x: 80, y: 25},
+        {x: 80, y: 75}, {x: 20, y: 75},
+        {x: 50, y: 50}  // Final Center check
     ];
     let currentPoint = 0;
 
@@ -56,15 +66,14 @@
         await webgazer.setRegression('ridge').begin();
         webgazer.showVideoPreview(false).showPredictionPoints(true);
         
-        msg.innerText = "ドットを目で追いかけてください";
-        target.style.display = "block";
-        runTimerCalibration();
+        msg.innerText = "ドットをじっと見つめてください";
+        setTimeout(runCalibration, 2000);
     }
 
-    function runTimerCalibration() {
+    function runCalibration() {
         if (currentPoint >= points.length) {
-            target.style.display = "none";
-            msg.innerText = "校正が完了しました";
+            container.style.opacity = "0";
+            msg.innerText = "セットアップ完了";
             return;
         }
 
@@ -72,21 +81,27 @@
         const px = window.innerWidth * (p.x / 100);
         const py = window.innerHeight * (p.y / 100);
 
-        // ターゲットを移動
-        target.style.left = px + "px";
-        target.style.top = py + "px";
+        // 表示と移動
+        container.style.left = px + "px";
+        container.style.top = py + "px";
+        container.style.opacity = "1";
 
-        // 3秒間、その場所を学習させ続ける（50msごと）
         let ticks = 0;
+        const duration = 50; // 50ms * 40回 = 2秒間
+        
         const interval = setInterval(() => {
             webgazer.recordScreenPosition(px, py);
             ticks++;
-            
-            // 3秒（50ms * 60回）経過したら次の点へ
-            if (ticks >= 60) {
+
+            // リングを少しずつ縮める演出（オプション）
+            document.getElementById('timer-ring').style.transform = `scale(${1 - (ticks/duration)})`;
+
+            if (ticks >= duration) {
                 clearInterval(interval);
+                container.style.opacity = "0"; // 一旦消す演出
                 currentPoint++;
-                runTimerCalibration();
+                setTimeout(runCalibration, 800); // 次の点へ行く前のタメ
+                document.getElementById('timer-ring').style.transform = `scale(1)`;
             }
         }, 50);
     }
