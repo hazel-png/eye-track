@@ -3,47 +3,28 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Fixed Spatial Engine</title>
+    <title>Spatial View Engine | Perspective Focus</title>
     <style>
-        :root { --accent: #00f2ff; --bg: #020205; }
-        body { margin: 0; background: var(--bg); color: var(--accent); font-family: monospace; overflow: hidden; }
-        #container { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; }
-        #overlay { position: absolute; inset: 0; pointer-events: none; z-index: 10; display: flex; flex-direction: column; justify-content: space-between; padding: 20px; box-sizing: border-box; }
-        .panel { background: rgba(10, 10, 25, 0.9); border: 1px solid var(--accent); padding: 10px; pointer-events: auto; font-size: 12px; }
-        .ui-bottom { display: flex; justify-content: center; gap: 15px; pointer-events: auto; padding-bottom: 20px; }
-        .btn { cursor: pointer; padding: 15px 30px; background: none; border: 1px solid var(--accent); color: var(--accent); font-weight: bold; transition: 0.2s; }
-        .btn:hover:not(:disabled) { background: var(--accent); color: #000; }
-        .btn:disabled { opacity: 0.3; cursor: not-allowed; border-color: #555; color: #555; }
-        #log { color: #ff00f2; margin-top: 5px; font-size: 10px; }
+        body { margin: 0; background: #000; overflow: hidden; font-family: monospace; }
+        #container { position: absolute; inset: 0; }
+        #status { 
+            position: absolute; top: 20px; left: 20px; color: #00f2ff; 
+            background: rgba(0,0,0,0.7); padding: 10px; border: 1px solid #00f2ff;
+            pointer-events: none; z-index: 100; font-size: 12px;
+        }
         #webcam { display: none; }
     </style>
 </head>
 <body>
 
+    <div id="status">INITIALIZING AI...</div>
     <div id="container"></div>
     <video id="webcam" autoplay playsinline></video>
-
-    <div id="overlay">
-        <div class="panel">
-            <div>SYSTEM STATUS</div>
-            <div id="log">WAITING FOR USER...</div>
-            <div id="track-info" style="margin-top:10px; color:#fff;"></div>
-        </div>
-
-        <div class="ui-bottom">
-            <label class="btn">
-                1. SELECT AUDIO
-                <input type="file" id="fileInput" accept="audio/*" style="display:none;">
-            </label>
-            <button id="playBtn" class="btn" disabled>2. START ENGINE</button>
-        </div>
-    </div>
 
     <script type="importmap">
         {
             "imports": {
-                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
             }
         }
     </script>
@@ -52,47 +33,64 @@
         import * as THREE from 'three';
         import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3";
 
-        let scene, camera, renderer, audio, listener, headGroup, coreMesh, faceLandmarker;
+        let scene, camera, renderer, faceLandmarker;
         const video = document.getElementById('webcam');
-        const log = document.getElementById('log');
-        const playBtn = document.getElementById('playBtn');
+        const status = document.getElementById('status');
 
-        function updateLog(msg) { log.innerText = msg; console.log(msg); }
+        // スムージング用変数
+        let targetPos = new THREE.Vector3(0, 0, 15);
+        let currentPos = new THREE.Vector3(0, 0, 15);
 
         async function init() {
-            updateLog("INITIALIZING THREE.JS...");
+            // --- Scene Setup ---
             scene = new THREE.Scene();
-            camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
-            camera.position.set(0, 0, 15);
+            scene.fog = new THREE.Fog(0x000000, 10, 50);
 
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
             document.getElementById('container').appendChild(renderer.domElement);
 
-            scene.add(new THREE.GridHelper(100, 40, 0x00f2ff, 0x020210));
+            // --- 視覚的要素（奥行きを感じさせるための配置） ---
+            // 1. 床と天井のグリッド
+            const gridTop = new THREE.GridHelper(100, 20, 0x00f2ff, 0x002233);
+            gridTop.position.y = 10;
+            scene.add(gridTop);
 
-            headGroup = new THREE.Group();
-            listener = new THREE.AudioListener();
-            headGroup.add(listener);
-            scene.add(headGroup);
+            const gridBottom = new THREE.GridHelper(100, 20, 0x00f2ff, 0x002233);
+            gridBottom.position.y = -10;
+            scene.add(gridBottom);
 
-            coreMesh = new THREE.Mesh(
-                new THREE.IcosahedronGeometry(2, 1),
-                new THREE.MeshBasicMaterial({ color: 0x00f2ff, wireframe: true })
-            );
-            coreMesh.position.set(0, 0, -10);
-            scene.add(coreMesh);
+            // 2. 空間に浮かぶ構造体
+            for (let i = 0; i < 50; i++) {
+                const geometry = new THREE.BoxGeometry(1, 1, 1);
+                const material = new THREE.MeshBasicMaterial({ color: 0x00f2ff, wireframe: true });
+                const cube = new THREE.Mesh(geometry, material);
+                cube.position.set(
+                    (Math.random() - 0.5) * 40,
+                    (Math.random() - 0.5) * 20,
+                    (Math.random() - 0.5) * 40 - 10
+                );
+                scene.add(cube);
+            }
 
-            audio = new THREE.PositionalAudio(listener);
-            audio.panner.panningModel = 'HRTF'; 
-            coreMesh.add(audio);
+            // 3. 遠くの光（パーティクル）
+            const starGeo = new THREE.BufferGeometry();
+            const starCoords = [];
+            for (let i = 0; i < 1000; i++) {
+                starCoords.push((Math.random() - 0.5) * 100, (Math.random() - 0.5) * 100, (Math.random() - 0.5) * 100);
+            }
+            starGeo.setAttribute('position', new THREE.Float32BufferAttribute(starCoords, 3));
+            const starMat = new THREE.PointsMaterial({ color: 0xffffff, size: 0.1 });
+            scene.add(new THREE.Points(starGeo, starMat));
 
             await setupTracking();
             animate();
         }
 
         async function setupTracking() {
-            updateLog("LOADING AI MODEL...");
             try {
                 const res = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm");
                 faceLandmarker = await FaceLandmarker.createFromOptions(res, {
@@ -100,16 +98,15 @@
                     runningMode: "VIDEO", numFaces: 1
                 });
 
-                updateLog("REQUESTING CAMERA...");
                 const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
                 video.srcObject = stream;
                 video.onloadedmetadata = () => {
                     video.play();
-                    updateLog("READY: SELECT AUDIO FILE");
+                    status.innerText = "TRACKING ACTIVE - MOVE YOUR HEAD";
                     predict();
                 };
             } catch (e) {
-                updateLog("ERROR: " + e.message);
+                status.innerText = "ERROR: " + e.message;
             }
         }
 
@@ -118,13 +115,18 @@
                 const results = faceLandmarker.detectForVideo(video, performance.now());
                 if (results.faceLandmarks?.[0]) {
                     const lm = results.faceLandmarks[0];
-                    const targetX = (0.5 - ((lm[234].x + lm[454].x) / 2)) * 40;
-                    const targetYaw = (lm[1].x - ((lm[234].x + lm[454].x) / 2)) * 10;
-                    
-                    headGroup.position.x += (targetX - headGroup.position.x) * 0.2;
-                    headGroup.rotation.y += (targetYaw - headGroup.rotation.y) * 0.2;
-                    
-                    document.getElementById('track-info').innerText = `X: ${targetX.toFixed(2)} | YAW: ${targetYaw.toFixed(2)}`;
+
+                    // 顔の中心座標 (0.0 - 1.0)
+                    const centerX = (lm[234].x + lm[454].x) / 2;
+                    const centerY = (lm[234].y + lm[454].y) / 2;
+                    const faceWidth = Math.abs(lm[454].x - lm[234].x);
+
+                    // --- カメラ座標の計算 (Window Effect) ---
+                    // 頭を右に動かす(centerXが小さくなる)と、カメラは右に移動する
+                    targetPos.x = (0.5 - centerX) * 30; 
+                    targetPos.y = (0.5 - centerY) * 20;
+                    // 顔の大きさで前後移動 (Z軸)
+                    targetPos.z = (0.15 / faceWidth) * 10 + 5;
                 }
             }
             requestAnimationFrame(predict);
@@ -132,46 +134,17 @@
 
         function animate() {
             requestAnimationFrame(animate);
-            if (audio.isPlaying) {
-                coreMesh.rotation.y += 0.01;
-                coreMesh.scale.setScalar(1 + Math.sin(Date.now() * 0.005) * 0.2);
-            }
+
+            // イージング（滑らかな追従）
+            currentPos.lerp(targetPos, 0.1);
+            
+            camera.position.copy(currentPos);
+            
+            // 常に中心（0,0,0）を見つめることで、覗き込み効果を出す
+            camera.lookAt(0, 0, -5);
+
             renderer.render(scene, camera);
         }
-
-        // --- ファイル読み込みの修正 ---
-        document.getElementById('fileInput').addEventListener('change', async (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
-
-            updateLog("LOADING AUDIO...");
-            const arrayBuffer = await file.arrayBuffer();
-            
-            listener.context.decodeAudioData(arrayBuffer, (buffer) => {
-                audio.setBuffer(buffer);
-                audio.setLoop(true);
-                playBtn.disabled = false; // ここでボタンを有効化
-                updateLog("AUDIO LOADED. PRESS START.");
-            }, (err) => {
-                updateLog("DECODE ERROR: " + err);
-            });
-        });
-
-        playBtn.addEventListener('click', () => {
-            if (listener.context.state === 'suspended') {
-                listener.context.resume();
-            }
-            
-            if (audio.isPlaying) {
-                audio.pause();
-                playBtn.innerText = "RESUME ENGINE";
-                updateLog("PAUSED");
-            } else {
-                audio.play();
-                playBtn.innerText = "PAUSE ENGINE";
-                updateLog("ENGINE RUNNING...");
-            }
-        });
 
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
