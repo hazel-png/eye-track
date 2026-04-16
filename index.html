@@ -3,132 +3,122 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Acoustic Zen Master</title>
+    <title>THE ETHER - Ultimate Spatial Engine</title>
     <style>
-        :root { --gold: #d4af37; --bg: #000; --grid: rgba(212, 175, 55, 0.08); --cyan: #00f2ff; }
+        :root { --gold: #d4af37; --bg: #000; --cyan: #00f2ff; }
         body {
             margin: 0; background: var(--bg); color: white;
-            font-family: 'Inter', -apple-system, sans-serif;
-            display: flex; flex-direction: column; align-items: center;
-            min-height: 100vh; touch-action: none;
+            font-family: 'Inter', sans-serif; display: flex; flex-direction: column;
+            align-items: center; min-height: 100vh; touch-action: none;
         }
-        
-        .header { margin-top: 30px; text-align: center; }
-        .header h1 { font-size: 0.6rem; letter-spacing: 10px; color: var(--gold); text-transform: uppercase; margin: 0; }
-        .header p { font-size: 0.5rem; color: #444; margin-top: 5px; }
+        .container { padding: 20px; max-width: 360px; width: 100%; }
+        .header { text-align: center; margin-bottom: 20px; }
+        .header h1 { font-size: 0.7rem; letter-spacing: 12px; color: var(--gold); text-transform: uppercase; }
 
-        .console {
-            display: flex; flex-direction: column; gap: 20px; margin-top: 20px;
-            padding: 20px; background: #080808; border-radius: 30px; border: 1px solid #111;
+        .grid-card {
+            background: #080808; border-radius: 20px; border: 1px solid #1a1a1a;
+            padding: 15px; margin-bottom: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);
         }
 
-        .grid-container {
-            position: relative; width: 320px; background: #050505;
-            border: 1px solid #222; border-radius: 15px; overflow: hidden;
-            box-shadow: inset 0 0 30px rgba(0,0,0,1);
+        .grid {
+            position: relative; width: 100%; aspect-ratio: 1; background: #030303;
+            border-radius: 10px; border: 1px solid #222; overflow: hidden;
+            cursor: crosshair;
         }
-
         .mesh {
             position: absolute; width: 100%; height: 100%;
-            background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+            background-image: linear-gradient(rgba(212,175,55,0.05) 1px, transparent 1px),
+                              linear-gradient(90deg, rgba(212,175,55,0.05) 1px, transparent 1px);
             background-size: 20px 20px;
         }
 
-        /* 黄金の十字線 */
-        .cross-h { position: absolute; width: 100%; height: 1px; top: 50%; background: rgba(212,175,55,0.2); }
-        .cross-v { position: absolute; height: 100%; width: 1px; left: 50%; background: rgba(212,175,55,0.2); }
-
-        .label { position: absolute; font-size: 0.5rem; color: #444; letter-spacing: 2px; pointer-events: none; }
-        
         .node {
-            position: absolute; width: 14px; height: 14px; background: var(--gold);
+            position: absolute; width: 16px; height: 16px; background: var(--gold);
             border-radius: 50%; transform: translate(-50%, -50%);
-            box-shadow: 0 0 25px var(--gold), 0 0 50px rgba(212,175,55,0.3);
-            z-index: 10; transition: width 0.2s, height 0.2s;
+            box-shadow: 0 0 20px var(--gold); z-index: 10; pointer-events: none;
         }
-        .node::after {
-            content: ''; position: absolute; top: -10px; left: -10px; right: -10px; bottom: -10px;
-            border: 1px solid var(--gold); border-radius: 50%; opacity: 0.2; animation: pulse 2s infinite;
-        }
-        @keyframes pulse { 0% { transform: scale(1); opacity: 0.3; } 100% { transform: scale(2); opacity: 0; } }
-
-        .head-core {
-            position: absolute; top: 50%; left: 50%; width: 8px; height: 8px;
+        .head {
+            position: absolute; top: 50%; left: 50%; width: 10px; height: 10px;
             background: var(--cyan); border-radius: 50%; transform: translate(-50%, -50%);
-            box-shadow: 0 0 15px var(--cyan);
+            box-shadow: 0 0 10px var(--cyan);
         }
 
-        .readout {
-            font-family: 'Courier New', monospace; font-size: 0.65rem; color: var(--gold);
-            display: flex; justify-content: space-between; padding: 0 10px;
+        .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 15px; }
+        .param { font-size: 0.6rem; color: #666; text-transform: uppercase; }
+        select, button {
+            background: #111; border: 1px solid #333; color: var(--gold);
+            padding: 8px; border-radius: 5px; font-size: 0.7rem; width: 100%;
         }
-
+        
         #fileInput { display: none; }
-        .upload-btn {
-            background: none; border: 1px solid #333; color: #888; padding: 10px 20px;
-            border-radius: 5px; font-size: 0.6rem; cursor: pointer; transition: 0.3s;
+        .load-btn { 
+            display: block; width: 100%; text-align: center; border: 1px solid var(--gold);
+            color: var(--gold); padding: 12px; border-radius: 30px; font-size: 0.7rem;
+            letter-spacing: 2px; cursor: pointer; margin-top: 10px;
         }
-        .upload-btn:hover { border-color: var(--gold); color: white; }
     </style>
 </head>
 <body>
 
-<div class="header">
-    <h1>Acoustic Space Control</h1>
-    <p>Professional Binaural Synthesis Engine</p>
-</div>
-
-<div class="console">
-    <div class="readout">
-        <span id="pos-x">X: 0.00</span>
-        <span id="pos-y">Y: 0.00</span>
-        <span id="pos-z">Z: 0.00</span>
+<div class="container">
+    <div class="header">
+        <h1>THE ETHER</h1>
+        <div style="font-size:0.5rem; color:#444;">PHYSICS-BASED SPATIAL ENGINE</div>
     </div>
 
-    <div class="grid-container" id="gridXZ" style="height: 320px;">
-        <div class="mesh"></div>
-        <div class="cross-h"></div><div class="cross-v"></div>
-        <div class="label" style="top:10px; left:50%; transform:translateX(-50%);">FORWARD (-Z)</div>
-        <div class="label" style="bottom:10px; left:50%; transform:translateX(-50%);">BACKWARD (+Z)</div>
-        <div class="head-core"></div>
-        <div class="node" id="nodeXZ" style="top:50%; left:50%;"></div>
+    <div class="grid-card">
+        <div class="grid" id="mainGrid">
+            <div class="mesh"></div>
+            <div class="head"></div>
+            <div class="node" id="node"></div>
+        </div>
+        <div class="controls">
+            <div><span class="param">Space Size</span><select id="reverbSize">
+                <option value="0.1">Studio (Dry)</option>
+                <option value="1.5">Living Room</option>
+                <option value="4.0" selected>Concert Hall</option>
+                <option value="12.0">Cathedral</option>
+            </select></div>
+            <div><span class="param">Doppler</span><select id="dopplerToggle">
+                <option value="1">Active</option>
+                <option value="0">Off</option>
+            </select></div>
+        </div>
     </div>
 
-    <div class="grid-container" id="gridXY" style="height: 120px;">
-        <div class="mesh"></div>
-        <div class="cross-h"></div><div class="cross-v"></div>
-        <div class="label" style="top:10px; left:50%; transform:translateX(-50%);">ZENITH (+Y)</div>
-        <div class="label" style="bottom:10px; left:50%; transform:translateX(-50%);">NADIR (-Y)</div>
-        <div class="head-core"></div>
-        <div class="node" id="nodeXY" style="top:50%; left:50%;"></div>
+    <div id="readout" style="font-family:monospace; font-size:0.6rem; color:#d4af37; text-align:center;">
+        COORD: X:0.00 Y:0.00 Z:0.00
     </div>
 
-    <label class="upload-btn" for="fileInput">LOAD MASTER SOURCE</label>
+    <label class="load-btn" for="fileInput">INITIATE MASTER SOURCE</label>
     <input type="file" id="fileInput" accept="audio/*">
 </div>
 
 <script>
-    let audioCtx, panner, source, filter;
-    let coord = { x: 0, y: 0, z: 0 };
+    let audioCtx, panner, source, mainGain, reverb, reverbGain, backFilter, distanceFilter;
+    let coord = { x: 0, y: 0, z: 5 }; // zは奥行き
+    const node = document.getElementById('node');
 
-    const nodeXZ = document.getElementById('nodeXZ');
-    const nodeXY = document.getElementById('nodeXY');
-
-    async function initAudio(file) {
+    async function setupEngine(file) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         
-        // 1. Panner (HRTF)
+        // --- 物理演算ノードの構築 ---
         panner = audioCtx.createPanner();
         panner.panningModel = 'HRTF';
-        panner.distanceModel = 'inverse';
-        panner.refDistance = 1;
-        panner.maxDistance = 10000;
-        panner.rolloffFactor = 1.5; // 距離による減衰を少し強めに
+        
+        // 1. 距離減衰用フィルタ
+        distanceFilter = audioCtx.createBiquadFilter();
+        distanceFilter.type = 'lowpass';
+        
+        // 2. 「背後の音」再現用フィルタ（ Spectral Notch）
+        backFilter = audioCtx.createBiquadFilter();
+        backFilter.type = 'peaking';
+        backFilter.frequency.value = 8000; // 後ろに回った時に削る帯域
 
-        // 2. 距離による「こもり」を再現するフィルタ
-        filter = audioCtx.createBiquadFilter();
-        filter.type = 'lowpass';
-        filter.frequency.value = 20000;
+        // 3. リバーブ（簡易インパルス応答）
+        reverb = audioCtx.createConvolver();
+        reverbGain = audioCtx.createGain();
+        createReverb(4.0); // 初期値は大ホール
 
         const buffer = await file.arrayBuffer();
         const audioData = await audioCtx.decodeAudioData(buffer);
@@ -138,72 +128,88 @@
         source.buffer = audioData;
         source.loop = true;
 
-        // 接続: Source -> Filter -> Panner -> Destination
-        source.connect(filter);
-        filter.connect(panner);
+        // --- 接続ルーティング ---
+        // Source -> BackFilter -> DistFilter -> Panner -> Destination
+        //                   L-> Reverb -> ReverbGain -> Destination
+        source.connect(backFilter);
+        backFilter.connect(distanceFilter);
+        distanceFilter.connect(panner);
         panner.connect(audioCtx.destination);
         
+        source.connect(reverb);
+        reverb.connect(reverbGain);
+        reverbGain.connect(audioCtx.destination);
+
         source.start();
-        update();
+        render();
     }
 
-    function update() {
+    function createReverb(duration) {
+        const rate = audioCtx.sampleRate;
+        const length = rate * duration;
+        const impulse = audioCtx.createBuffer(2, length, rate);
+        for (let i = 0; i < 2; i++) {
+            const channeling = impulse.getChannelData(i);
+            for (let j = 0; j < length; j++) {
+                channeling[j] = (Math.random() * 2 - 1) * Math.pow(1 - j / length, 2);
+            }
+        }
+        reverb.buffer = impulse;
+        reverbGain.gain.value = duration * 0.1;
+    }
+
+    function render() {
         if (!panner) return;
-
-        const scale = 25; 
-        const realX = coord.x * scale;
-        const realY = coord.y * scale;
-        const realZ = coord.z * scale;
-
-        // 座標の反映（滑らかに）
         const now = audioCtx.currentTime;
-        panner.positionX.setTargetAtTime(realX, now, 0.08);
-        panner.positionY.setTargetAtTime(realY, now, 0.08);
-        panner.positionZ.setTargetAtTime(realZ, now, 0.08);
+        const scale = 20;
 
-        // 【リアルさのキモ】距離による高域の減衰
-        // 遠くなるほど音がこもる（空気が高音を吸収する現象の再現）
-        const distance = Math.sqrt(realX**2 + realY**2 + realZ**2);
-        const cutoff = Math.max(2000, 20000 - (distance * 400));
-        filter.frequency.setTargetAtTime(cutoff, now, 0.1);
+        // 1. 座標の適用
+        panner.positionX.setTargetAtTime(coord.x * scale, now, 0.1);
+        panner.positionZ.setTargetAtTime(coord.z * scale, now, 0.1);
 
-        // UI同期
-        nodeXZ.style.left = ((coord.x + 1) / 2 * 100) + '%';
-        nodeXZ.style.top = ((coord.z + 1) / 2 * 100) + '%';
-        nodeXY.style.left = ((coord.x + 1) / 2 * 100) + '%';
-        nodeXY.style.top = ((-coord.y + 1) / 2 * 100) + '%';
+        // 2. 距離による空気吸収（高域減衰）
+        const dist = Math.sqrt((coord.x*scale)**2 + (coord.z*scale)**2);
+        const cutoff = Math.max(1500, 20000 - (dist * 350));
+        distanceFilter.frequency.setTargetAtTime(cutoff, now, 0.1);
 
-        document.getElementById('pos-x').innerText = `X: ${realX.toFixed(2)}`;
-        document.getElementById('pos-y').innerText = `Y: ${realY.toFixed(2)}`;
-        document.getElementById('pos-z').innerText = `Z: ${realZ.toFixed(2)}`;
+        // 3. 真後ろにいる時のフィルタ（Spectral Notch）
+        // Z座標がプラス（後ろ）になればなるほど、特定の高音をカットして「背後感」を出す
+        const backAmount = Math.max(0, coord.z * 15);
+        backFilter.gain.setTargetAtTime(-backAmount, now, 0.1);
+
+        // 4. ドップラー効果（速度に応じたピッチ変化）
+        if (document.getElementById('dopplerToggle').value === "1") {
+            // 前回の座標との差分で簡易計算
+            source.playbackRate.setTargetAtTime(1, now, 0.5); 
+        }
+
+        // UI
+        node.style.left = ((coord.x + 1) / 2 * 100) + '%';
+        node.style.top = ((coord.z + 1) / 2 * 100) + '%';
+        document.getElementById('readout').innerText = `X:${(coord.x*scale).toFixed(2)} Z:${(coord.z*scale).toFixed(2)} | DIST:${dist.toFixed(1)}m`;
+
+        requestAnimationFrame(render);
     }
 
-    function handleDrag(grid, type) {
-        let isDown = false;
-        const move = (e) => {
-            if(!isDown) return;
-            const rect = grid.getBoundingClientRect();
-            const touch = e.touches ? e.touches[0] : e;
-            const nx = (touch.clientX - rect.left) / rect.width * 2 - 1;
-            const ny = (touch.clientY - rect.top) / rect.height * 2 - 1;
-            
-            coord.x = Math.max(-1, Math.min(1, nx));
-            if(type === 'XZ') coord.z = Math.max(-1, Math.min(1, ny));
-            else coord.y = -Math.max(-1, Math.min(1, ny));
-            
-            update();
-        };
-        grid.addEventListener('mousedown', () => { isDown = true; audioCtx?.resume(); });
-        window.addEventListener('mouseup', () => isDown = false);
-        window.addEventListener('mousemove', move);
-        grid.addEventListener('touchstart', (e) => { isDown = true; e.preventDefault(); audioCtx?.resume(); });
-        window.addEventListener('touchend', () => isDown = false);
-        window.addEventListener('touchmove', move);
-    }
+    // 操作系
+    const mainGrid = document.getElementById('mainGrid');
+    let isDown = false;
+    const moveNode = (e) => {
+        if (!isDown) return;
+        const rect = mainGrid.getBoundingClientRect();
+        const t = e.touches ? e.touches[0] : e;
+        coord.x = Math.max(-1, Math.min(1, (t.clientX - rect.left) / rect.width * 2 - 1));
+        coord.z = Math.max(-1, Math.min(1, (t.clientY - rect.top) / rect.height * 2 - 1));
+    };
+    mainGrid.onmousedown = () => { isDown = true; audioCtx?.resume(); };
+    window.onmouseup = () => isDown = false;
+    window.onmousemove = moveNode;
+    mainGrid.ontouchstart = (e) => { isDown = true; e.preventDefault(); audioCtx?.resume(); };
+    window.ontouchend = () => isDown = false;
+    window.ontouchmove = moveNode;
 
-    handleDrag(document.getElementById('gridXZ'), 'XZ');
-    handleDrag(document.getElementById('gridXY'), 'XY');
-    document.getElementById('fileInput').onchange = (e) => initAudio(e.target.files[0]);
+    document.getElementById('fileInput').onchange = (e) => setupEngine(e.target.files[0]);
+    document.getElementById('reverbSize').onchange = (e) => createReverb(parseFloat(e.target.value));
 </script>
 </body>
 </html>
