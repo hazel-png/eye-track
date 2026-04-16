@@ -2,38 +2,44 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Extreme Spatial Reality Engine</title>
+    <title>AI Spatial Immersion Engine - Ultra Real</title>
     <style>
-        body { margin: 0; background: #020205; color: #fff; font-family: 'Segoe UI', sans-serif; overflow: hidden; }
-        #overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; display: flex; flex-direction: column; justify-content: space-between; padding: 40px; box-sizing: border-box; }
-        .ui-panel { pointer-events: auto; background: rgba(0,0,0,0.85); padding: 25px 40px; border-radius: 100px; border: 1px solid #00d4ff; display: flex; align-items: center; gap: 30px; box-shadow: 0 0 50px rgba(0,212,255,0.15); }
-        .btn { cursor: pointer; padding: 15px 35px; background: #00d4ff; border: none; font-weight: bold; border-radius: 50px; color: #000; transition: 0.3s; letter-spacing: 1px; }
-        .btn:hover { background: #fff; transform: scale(1.05); box-shadow: 0 0 20px #00d4ff; }
-        #status { position: absolute; top: 20px; left: 20px; font-family: 'Courier New'; border-left: 4px solid #ff0055; padding-left: 20px; }
-        .monitor-label { font-size: 10px; color: #444; text-transform: uppercase; }
-        .monitor-val { font-size: 18px; color: #00d4ff; margin-bottom: 10px; }
+        body { margin: 0; background: #000; color: #00d4ff; font-family: 'Courier New', monospace; overflow: hidden; }
+        #overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; padding: 30px; box-sizing: border-box; z-index: 10; }
+        .ui-bottom { display: flex; justify-content: center; align-items: center; gap: 20px; pointer-events: auto; background: rgba(5,5,20,0.95); padding: 25px; border-radius: 60px; border: 1px solid #00d4ff; box-shadow: 0 0 30px rgba(0,212,255,0.2); }
+        .btn { cursor: pointer; padding: 15px 30px; background: #00d4ff; border: none; color: #000; border-radius: 40px; font-weight: bold; transition: 0.3s; letter-spacing: 1px; }
+        .btn:hover { background: #fff; transform: scale(1.05); }
+        .btn:disabled { background: #222; color: #555; cursor: not-allowed; }
+        #status-panel { position: absolute; top: 20px; left: 20px; background: rgba(0,0,0,0.8); padding: 20px; border-left: 4px solid #ff0055; pointer-events: none; border-radius: 0 10px 10px 0; }
+        .stat-item { margin-bottom: 5px; font-size: 13px; }
+        #webcam { display: none; }
+        input[type="file"] { display: none; }
     </style>
 </head>
 <body>
 
-    <div id="status">
-        <div class="monitor-label">Source Distance</div>
-        <div id="dist-val" class="monitor-val">0.00 m</div>
-        <div class="monitor-label">Interaural Delay (ITD)</div>
-        <div id="itd-val" class="monitor-val">0.00 ms</div>
-        <div class="monitor-label">Air Absorption</div>
-        <div id="air-val" class="monitor-val">0 %</div>
+    <video id="webcam" autoplay playsinline></video>
+
+    <div id="status-panel">
+        <div class="stat-item">SYSTEM: <span id="sys-stat" style="color:#fff">BOOTING...</span></div>
+        <div class="stat-item">TRACKING: <span id="track-stat" style="color:#ff0055">WAITING...</span></div>
+        <div class="stat-item">ITD/HRTF: <span id="hrtf-stat" style="color:#00ff88">ACTIVE</span></div>
+        <div class="stat-item" style="font-size: 10px; color: #666; margin-top: 10px;">ORIENTATION (P, Y, R)</div>
+        <div id="rot-stat" style="color:#00d4ff">0.00, 0.00, 0.00</div>
     </div>
 
     <div id="overlay">
         <div style="text-align: center;">
-            <h1 style="letter-spacing: 15px; margin: 0; color: #00d4ff;">ACOUSTIC REALISM</h1>
-            <p style="color: #333;">HRTF + ITD + Frequency Diffraction Engine</p>
+            <h1 style="letter-spacing: 12px; margin: 0; text-shadow: 0 0 20px #00d4ff;">SPATIAL IMMERSION</h1>
+            <p style="color: #666; font-size: 12px; margin-top: 10px;">AI-Driven Head Tracking & Acoustic Physics</p>
         </div>
-        <div style="display: flex; justify-content: center;">
-            <div class="ui-panel">
-                <label class="btn">LOAD AUDIO<input type="file" id="fileIn" accept="audio/*" style="display:none;"></label>
-                <button id="playBtn" class="btn" disabled>INITIALIZE SYSTEM</button>
+        
+        <div class="ui-bottom">
+            <label class="btn">1. LOAD AUDIO<input type="file" id="fileInput" accept="audio/*"></label>
+            <button id="playBtn" class="btn" disabled>2. START ENGINE</button>
+            <div style="font-size: 10px; text-align: center; min-width: 100px;">
+                REVERB MIX<br>
+                <input type="range" id="reverbMix" min="0" max="0.8" step="0.01" value="0.4" style="width: 100%;">
             </div>
         </div>
     </div>
@@ -51,134 +57,208 @@
         import * as THREE from 'three';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         import { DragControls } from 'three/addons/controls/DragControls.js';
+        import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3";
 
-        let scene, camera, renderer, mesh, audioCtx, posAudio, filter, dryGain, wetGain;
-        let isInitialized = false;
+        let scene, camera, renderer, audio, listener, headGroup, mesh, faceLandmarker;
+        let reverbNode, wetGain, dryGain, filterNode, analyser;
+        const video = document.getElementById('webcam');
+        const sysStat = document.getElementById('sys-stat');
+        const trackStat = document.getElementById('track-stat');
+        const rotStat = document.getElementById('rot-stat');
 
-        init();
-        animate();
+        // --- 1. AI Tracking ---
+        async function setupTracking() {
+            try {
+                const filesetResolver = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm");
+                faceLandmarker = await FaceLandmarker.createFromOptions(filesetResolver, {
+                    baseOptions: { 
+                        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+                        delegate: "GPU" 
+                    },
+                    runningMode: "VIDEO",
+                    numFaces: 1
+                });
+                
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+                video.srcObject = stream;
+                video.onloadeddata = () => {
+                    sysStat.innerText = "ONLINE";
+                    predictFace();
+                };
+            } catch (e) {
+                sysStat.innerText = "HARDWARE ERROR";
+                console.error(e);
+            }
+        }
 
+        async function predictFace() {
+            if (faceLandmarker && video.readyState >= 2) {
+                const results = faceLandmarker.detectForVideo(video, performance.now());
+                if (results.faceLandmarks && results.faceLandmarks.length > 0) {
+                    trackStat.innerText = "LOCKED";
+                    const lm = results.faceLandmarks[0];
+                    
+                    const nose = lm[1];
+                    const leftEye = lm[33];
+                    const rightEye = lm[263];
+
+                    // より滑らかな追跡のためのマッピング
+                    const yaw = (nose.x - (leftEye.x + rightEye.x) / 2) * 4;
+                    const pitch = (nose.y - (leftEye.y + rightEye.y) / 2) * 4;
+                    const roll = Math.atan2(rightEye.y - leftEye.y, rightEye.x - leftEye.x);
+
+                    // リスナーの回転を更新
+                    headGroup.rotation.set(pitch, -yaw, -roll);
+                    rotStat.innerText = `${pitch.toFixed(2)}, ${yaw.toFixed(2)}, ${roll.toFixed(2)}`;
+                } else {
+                    trackStat.innerText = "SEARCHING...";
+                }
+            }
+            requestAnimationFrame(predictFace);
+        }
+
+        // --- 2. Audio & Scene ---
         function init() {
             scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x010103);
+            scene.fog = new THREE.FogExp2(0x010103, 0.05);
+
             camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
-            camera.position.set(0, 15, 30);
+            camera.position.set(0, 10, 25);
 
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.setPixelRatio(window.devicePixelRatio);
             document.body.appendChild(renderer.domElement);
 
-            scene.add(new THREE.GridHelper(200, 50, 0x112244, 0x050510));
-            
-            // リスナー（中心：あなたの頭）
-            const head = new THREE.Group();
-            const headMesh = new THREE.Mesh(new THREE.IcosahedronGeometry(0.6, 2), new THREE.MeshBasicMaterial({color: 0x00d4ff, wireframe: true}));
-            head.add(headMesh);
-            scene.add(head);
+            const grid = new THREE.GridHelper(200, 80, 0x00d4ff, 0x030308);
+            scene.add(grid);
 
-            // 音源（エネルギー体）
+            headGroup = new THREE.Group();
+            const headMesh = new THREE.Mesh(
+                new THREE.IcosahedronGeometry(0.5, 2),
+                new THREE.MeshBasicMaterial({ color: 0x00d4ff, wireframe: true })
+            );
+            headGroup.add(headMesh);
+            scene.add(headGroup);
+
+            listener = new THREE.AudioListener();
+            headGroup.add(listener);
+
             mesh = new THREE.Mesh(
                 new THREE.SphereGeometry(1.2, 32, 32),
-                new THREE.MeshStandardMaterial({ color: 0xff0055, emissive: 0xff0055, emissiveIntensity: 3, transparent: true, opacity: 0.8 })
+                new THREE.MeshStandardMaterial({ color: 0xff0055, emissive: 0xff0055, emissiveIntensity: 5 })
             );
-            mesh.position.set(12, 1, 0); 
+            mesh.position.set(0, 2, -15);
             scene.add(mesh);
-            mesh.add(new THREE.PointLight(0xff0055, 150, 40));
-            scene.add(new THREE.AmbientLight(0xffffff, 0.05));
+            mesh.add(new THREE.PointLight(0xff0055, 200, 30));
+            scene.add(new THREE.AmbientLight(0x101015));
 
-            const o = new OrbitControls(camera, renderer.domElement);
-            o.enableDamping = true;
-            const d = new DragControls([mesh], camera, renderer.domElement);
-            d.addEventListener('dragstart', () => o.enabled = false);
-            d.addEventListener('dragend', () => o.enabled = true);
-        }
+            // HRTF Panner設定
+            audio = new THREE.PositionalAudio(listener);
+            audio.setRefDistance(0.5);
+            audio.setRolloffFactor(4.0); // 減衰を鋭く
+            audio.setDistanceModel('exponential');
+            
+            // HRTFを強制
+            const panner = audio.panner;
+            panner.panningModel = 'HRTF';
+            
+            mesh.add(audio);
 
-        async function setupEngine(buffer) {
-            const listener = new THREE.AudioListener();
-            camera.add(listener);
-            audioCtx = listener.context;
-
-            posAudio = new THREE.PositionalAudio(listener);
-            posAudio.setBuffer(buffer);
-            posAudio.setLoop(true);
+            const ctx = listener.context;
+            filterNode = ctx.createBiquadFilter();
+            filterNode.type = 'lowpass';
             
-            // --- リアルさを決める「HRTF」設定 ---
-            const panner = posAudio.panner;
-            panner.panningModel = 'HRTF'; // ここで左右のラグ（ITD）が発生する
-            panner.distanceModel = 'inverse';
-            panner.refDistance = 1;
-            panner.rolloffFactor = 2.5; 
-            
-            // 物理シミュレーター接続
-            filter = audioCtx.createBiquadFilter();
-            filter.type = 'lowpass';
-            
-            // 特大残響（リバーブ）
-            const revNode = audioCtx.createConvolver();
-            const len = audioCtx.sampleRate * 4.0;
-            const buf = audioCtx.createBuffer(2, len, audioCtx.sampleRate);
+            reverbNode = ctx.createConvolver();
+            const irLen = ctx.sampleRate * 3.5;
+            const irBuf = ctx.createBuffer(2, irLen, ctx.sampleRate);
             for(let c=0; c<2; c++) {
-                const d = buf.getChannelData(c);
-                for(let i=0; i<len; i++) d[i] = (Math.random()*2-1) * Math.pow(1-i/len, 2.5);
+                const d = irBuf.getChannelData(c);
+                for(let i=0; i<irLen; i++) d[i] = (Math.random()*2-1) * Math.pow(1-i/irLen, 2.5);
             }
-            revNode.buffer = buf;
+            reverbNode.buffer = irBuf;
 
-            dryGain = audioCtx.createGain();
-            wetGain = audioCtx.createGain();
+            dryGain = ctx.createGain();
+            wetGain = ctx.createGain();
+            wetGain.gain.value = 0.4;
 
-            // Pannerの出力を横取りして自作フィルターを通す
-            panner.disconnect();
-            panner.connect(filter);
-            filter.connect(dryGain);
-            dryGain.connect(audioCtx.destination);
-            filter.connect(revNode);
-            revNode.connect(wetGain);
-            wetGain.connect(audioCtx.destination);
+            // ルーティング
+            setTimeout(() => {
+                panner.disconnect();
+                panner.connect(filterNode);
+                filterNode.connect(dryGain);
+                dryGain.connect(ctx.destination);
+                filterNode.connect(reverbNode);
+                reverbNode.connect(wetGain);
+                wetGain.connect(ctx.destination);
+            }, 500);
 
-            mesh.add(posAudio);
-            posAudio.play();
-            isInitialized = true;
+            analyser = new THREE.AudioAnalyser(audio, 64);
+
+            const oControls = new OrbitControls(camera, renderer.domElement);
+            oControls.enableDamping = true;
+            const dControls = new DragControls([mesh], camera, renderer.domElement);
+            dControls.addEventListener('dragstart', () => oControls.enabled = false);
+            dControls.addEventListener('dragend', () => oControls.enabled = true);
+
+            setupTracking();
         }
 
-        document.getElementById('fileIn').addEventListener('change', (e) => {
-            const reader = new FileReader();
-            reader.onload = async (ev) => {
-                const dummyCtx = new (window.AudioContext || window.webkitAudioContext)();
-                const buffer = await dummyCtx.decodeAudioData(ev.target.result);
+        init();
+
+        document.getElementById('fileInput').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            const url = URL.createObjectURL(file);
+            new THREE.AudioLoader().load(url, (buffer) => {
+                audio.setBuffer(buffer);
+                audio.setLoop(true);
                 document.getElementById('playBtn').disabled = false;
-                document.getElementById('playBtn').onclick = () => {
-                    if(!isInitialized) setupEngine(buffer);
-                    document.getElementById('playBtn').innerText = "SYSTEM ACTIVE";
-                };
-            };
-            reader.readAsArrayBuffer(e.target.files[0]);
+            });
+        });
+
+        document.getElementById('playBtn').addEventListener('click', () => {
+            if (audio.context.state === 'suspended') audio.context.resume();
+            audio.isPlaying ? audio.pause() : audio.play();
+            document.getElementById('playBtn').innerText = audio.isPlaying ? "PAUSE ENGINE" : "RESUME ENGINE";
+        });
+
+        document.getElementById('reverbMix').addEventListener('input', (e) => {
+            wetGain.gain.setTargetAtTime(e.target.value, audio.context.currentTime, 0.1);
         });
 
         function animate() {
             requestAnimationFrame(animate);
-            if (isInitialized) {
+            if (audio && audio.isPlaying) {
+                const level = analyser.getAverageFrequency() / 255;
+                mesh.scale.setScalar(1 + level * 0.4);
+
+                // --- 高度な物理シミュレーション ---
                 const dist = mesh.position.length();
-                document.getElementById('dist-val').innerText = `${dist.toFixed(2)} m`;
+                
+                // 1. リスナーの正面ベクトルと音源へのベクトルの角度を計算
+                const headDir = new THREE.Vector3(0, 0, -1).applyQuaternion(headGroup.quaternion);
+                const sourceDir = mesh.position.clone().normalize();
+                const dot = headDir.dot(sourceDir); // 1.0(正面) ~ -1.0(真後ろ)
 
-                // 1. ラグの計算（ITDの可視化）
-                // 簡易式：音速340m/s、耳の間隔20cmとして最大ラグを計算
-                const angle = Math.atan2(mesh.position.x, mesh.position.z);
-                const itd = Math.abs(Math.sin(angle) * (0.2 / 340) * 1000); 
-                document.getElementById('itd-val').innerText = `${itd.toFixed(2)} ms`;
+                // 2. 角度による音質の変化（背後を向くと音がこもる）
+                const angleDamping = THREE.MathUtils.lerp(0.6, 1.0, (dot + 1) / 2);
+                const freq = Math.max(200, (20000 - (dist * 1200)) * angleDamping);
+                
+                filterNode.frequency.setTargetAtTime(freq, audio.context.currentTime, 0.1);
 
-                // 2. 物理フィルタ（空気による高音減衰）
-                const cutoff = Math.max(100, 20000 - (dist * 1200));
-                filter.frequency.setTargetAtTime(cutoff, audioCtx.currentTime, 0.1);
-                document.getElementById('air-val').innerText = `${((1 - cutoff/20000)*100).toFixed(0)} %`;
-
-                // 3. 距離に応じた反響比率（遠いほど実体が消える）
-                const dry = Math.max(0, 1 - (dist / 20));
-                const wet = Math.min(0.6, dist / 25);
-                dryGain.gain.setTargetAtTime(dry, audioCtx.currentTime, 0.1);
-                wetGain.gain.setTargetAtTime(wet, audioCtx.currentTime, 0.1);
+                // 3. 距離によるDry/Wet比の自動調整（遠いほどリバーブ成分が勝つ）
+                const dynamicDry = Math.max(0, 1 - (dist / 25));
+                dryGain.gain.setTargetAtTime(dynamicDry, audio.context.currentTime, 0.1);
             }
             renderer.render(scene, camera);
         }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
     </script>
 </body>
 </html>
