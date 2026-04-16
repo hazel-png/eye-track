@@ -3,35 +3,28 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ultimate Spatial Engine | Fixed Audio & Tracking</title>
+    <title>Advanced Spatial Engine | Pro</title>
     <style>
-        :root { --accent: #00f2ff; --bg: #05050a; --glass: rgba(10, 10, 25, 0.9); }
-        body { margin: 0; background: var(--bg); color: var(--accent); font-family: 'Segoe UI', sans-serif; overflow: hidden; }
-        #container { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1; }
+        :root { --accent: #00f2ff; --bg: #020205; --glass: rgba(10, 10, 25, 0.85); }
+        body { margin: 0; background: var(--bg); color: var(--accent); font-family: 'Consolas', monospace; overflow: hidden; }
+        #container { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; }
         #overlay { 
             position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
             pointer-events: none; z-index: 10; display: flex; flex-direction: column; 
-            justify-content: space-between; padding: 40px; box-sizing: border-box; 
+            justify-content: space-between; padding: 30px; box-sizing: border-box; 
         }
-        #status-panel { 
-            background: var(--glass); backdrop-filter: blur(15px); padding: 15px; 
-            border-left: 3px solid var(--accent); font-size: 11px;
-            pointer-events: none; border-radius: 0 10px 10px 0; width: 220px;
-        }
-        .ui-bottom { 
-            display: flex; justify-content: center; align-items: center; gap: 20px; 
-            pointer-events: auto; background: var(--glass); padding: 20px 40px; 
-            border-radius: 100px; border: 1px solid rgba(0, 242, 255, 0.2);
-        }
+        .panel { background: var(--glass); border: 1px solid var(--accent); padding: 15px; border-radius: 4px; pointer-events: auto; }
+        .ui-bottom { display: flex; justify-content: center; gap: 20px; align-items: center; }
         .btn { 
-            cursor: pointer; padding: 10px 30px; background: transparent; 
-            border: 2px solid var(--accent); color: var(--accent); border-radius: 30px; 
-            font-weight: bold; transition: 0.3s; text-transform: uppercase;
+            cursor: pointer; padding: 12px 25px; background: transparent; 
+            border: 1px solid var(--accent); color: var(--accent); border-radius: 2px;
+            transition: 0.2s; font-size: 12px; letter-spacing: 2px;
         }
-        .btn:hover { background: var(--accent); color: #000; box-shadow: 0 0 20px var(--accent); }
-        .btn:disabled { opacity: 0.2; }
+        .btn:hover { background: var(--accent); color: #000; }
+        .btn:disabled { opacity: 0.3; }
         #webcam { display: none; }
-        .stat-val { color: #fff; float: right; }
+        .stat { font-size: 10px; margin: 5px 0; display: flex; justify-content: space-between; width: 180px; }
+        .stat span { color: #fff; }
     </style>
 </head>
 <body>
@@ -39,21 +32,17 @@
     <div id="container"></div>
     <video id="webcam" autoplay playsinline></video>
 
-    <div id="status-panel">
-        <div style="margin-bottom: 8px; font-weight: bold; color: #ff00f2;">FIXED AUDIO GRAPH</div>
-        <div>TRACKING: <span id="track-stat" class="stat-val">INIT...</span></div>
-        <div>X-POS: <span id="pos-x" class="stat-val">0.0</span></div>
-        <div>YAW: <span id="rot-y" class="stat-val">0.0</span></div>
-    </div>
-
     <div id="overlay">
-        <div style="text-align: center;">
-            <h1 style="letter-spacing: 12px; margin: 0; font-weight: 200;">SPATIAL CORE</h1>
-            <p style="opacity: 0.5; font-size: 10px;">AUDIO SYNC & MIRROR FIX ENABLED</p>
+        <div class="panel" style="width: fit-content;">
+            <div style="color: #ff00f2; margin-bottom: 10px;">CORE TRACKING ACTIVE</div>
+            <div class="stat">LATENCY COMP: <span id="comp">ON</span></div>
+            <div class="stat">PREDICTED X: <span id="p-x">0.0</span></div>
+            <div class="stat">PREDICTED YAW: <span id="p-y">0.0</span></div>
         </div>
+
         <div class="ui-bottom">
-            <label class="btn">Load Audio<input type="file" id="fileInput" accept="audio/*" style="display:none;"></label>
-            <button id="playBtn" class="btn" disabled>Start Engine</button>
+            <label class="btn">LOAD AUDIO<input type="file" id="fileInput" accept="audio/*" style="display:none;"></label>
+            <button id="playBtn" class="btn" disabled>INITIALIZING...</button>
         </div>
     </div>
 
@@ -68,92 +57,62 @@
 
     <script type="module">
         import * as THREE from 'three';
-        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-        import { DragControls } from 'three/addons/controls/DragControls.js';
         import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3";
 
-        let scene, camera, renderer, audio, listener, headGroup, coreMesh, faceLandmarker, orbit;
-        let filterNode, reverbNode, masterGain, analyser;
+        let scene, camera, renderer, audio, listener, headGroup, coreMesh, faceLandmarker;
+        let panner, lowPass, masterGain;
         const video = document.getElementById('webcam');
 
-        const LERP_POS = 0.04; 
-        const LERP_ROT = 0.1; 
+        // --- 物理パラメータ ---
+        const PREDICTION_MS = 60; // 予測ミリ秒（遅延分を先読み）
+        let lastPos = new THREE.Vector3();
+        let lastRot = 0;
+        let lastTime = performance.now();
 
         async function init() {
             scene = new THREE.Scene();
-            scene.fog = new THREE.FogExp2(0x05050a, 0.02);
-            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
-            camera.position.set(0, 5, 25);
+            camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 0, 15);
 
-            renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+            renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.setPixelRatio(window.devicePixelRatio);
             document.getElementById('container').appendChild(renderer.domElement);
 
-            scene.add(new THREE.GridHelper(200, 50, 0x00f2ff, 0x050515));
+            // 背景とグリッド
+            scene.add(new THREE.GridHelper(100, 40, 0x00f2ff, 0x020210));
 
+            // リスナー（自分）
             headGroup = new THREE.Group();
-            const headMesh = new THREE.Mesh(
-                new THREE.BoxGeometry(1.2, 1.5, 0.8),
-                new THREE.MeshBasicMaterial({ color: 0x00f2ff, wireframe: true })
-            );
-            headGroup.add(headMesh);
-            scene.add(headGroup);
-
             listener = new THREE.AudioListener();
             headGroup.add(listener);
+            scene.add(headGroup);
 
+            // 音源オブジェクト
             coreMesh = new THREE.Mesh(
-                new THREE.IcosahedronGeometry(2, 1),
-                new THREE.MeshStandardMaterial({ color: 0x00f2ff, wireframe: true, emissive: 0x00f2ff, emissiveIntensity: 2 })
+                new THREE.SphereGeometry(1, 32, 32),
+                new THREE.MeshBasicMaterial({ color: 0x00f2ff, wireframe: true })
             );
-            coreMesh.position.set(0, 3, -10);
+            coreMesh.position.set(0, 0, -10);
             scene.add(coreMesh);
-            coreMesh.add(new THREE.PointLight(0x00f2ff, 60, 40));
-            scene.add(new THREE.AmbientLight(0x111122));
 
-            // --- Fixed Audio Graph ---
+            // --- オーディオグラフの構築 ---
             const ctx = listener.context;
-            masterGain = ctx.createGain(); // 全ての音をまとめる出口
+            masterGain = ctx.createGain();
             
+            // PositionalAudioの代わりに生のPannerNodeを制御して精度を上げる
             audio = new THREE.PositionalAudio(listener);
-            audio.setRefDistance(5);
-            coreMesh.add(audio);
-
-            filterNode = ctx.createBiquadFilter();
-            reverbNode = ctx.createDelay();
-            const reverbGain = ctx.createGain(); // リバーブの音量調節
-            const feedback = ctx.createGain();
-
-            reverbNode.delayTime.value = 0.12;
-            feedback.gain.value = 0.3;
-            reverbGain.gain.value = 0.2; // ダブり感を抑え、広がりだけを残す
-
-            reverbNode.connect(feedback);
-            feedback.connect(reverbNode);
-
-            // 接続の見直し：audio -> filter -> masterGain
-            //                          -> reverb -> masterGain
-            audio.panner.disconnect();
-            audio.panner.connect(filterNode);
+            audio.setRolloffFactor(2);
+            // PanningModelをHRTFに設定（これがリアリティの鍵）
+            audio.panner.panningModel = 'HRTF'; 
+            audio.panner.distanceModel = 'inverse';
             
-            filterNode.connect(masterGain); 
-            filterNode.connect(reverbNode); 
-            reverbNode.connect(reverbGain);
-            reverbGain.connect(masterGain);
-
-            masterGain.connect(ctx.destination); // 最終出力はここだけ
-
-            analyser = new THREE.AudioAnalyser(audio, 128);
-
-            orbit = new OrbitControls(camera, renderer.domElement);
-            orbit.enableDamping = true;
-            const drag = new DragControls([coreMesh], camera, renderer.domElement);
-            drag.addEventListener('dragstart', () => orbit.enabled = false);
-            drag.addEventListener('dragend', () => orbit.enabled = true);
+            coreMesh.add(audio);
 
             await setupTracking();
             animate();
+            
+            document.getElementById('playBtn').innerText = "START ENGINE";
         }
 
         async function setupTracking() {
@@ -164,7 +123,7 @@
             });
             const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
             video.srcObject = stream;
-            video.onloadeddata = () => { document.getElementById('track-stat').innerText = "STABLE-FIXED"; predict(); };
+            video.onloadeddata = () => predict();
         }
 
         function predict() {
@@ -172,30 +131,42 @@
                 const results = faceLandmarker.detectForVideo(video, performance.now());
                 if (results.faceLandmarks?.[0]) {
                     const lm = results.faceLandmarks[0];
+                    const now = performance.now();
+                    const dt = (now - lastTime) / 1000;
 
-                    // 1. 耳ライン中心点 (234, 454)
-                    const headCenterX = (lm[234].x + lm[454].x) / 2;
-                    const headCenterY = (lm[234].y + lm[454].y) / 2;
+                    // 目と鼻の位置から座標を計算
+                    const centerX = (lm[234].x + lm[454].x) / 2;
+                    const centerY = (lm[234].y + lm[454].y) / 2;
                     const faceWidth = Math.abs(lm[454].x - lm[234].x);
 
-                    // 2. 位置計算 (鏡合わせの挙動に反転)
-                    const tX = (headCenterX - 0.5) * 30; // 左右移動の反転
-                    const tY = (0.5 - headCenterY) * 20 + 2;
-                    const tZ = (0.2 / faceWidth) * 12;
+                    // ターゲット座標 (反転修正済み)
+                    const targetX = (0.5 - centerX) * 40;
+                    const targetY = (0.5 - centerY) * 30;
+                    const targetZ = (0.15 / faceWidth) * 10;
+                    const targetYaw = (lm[1].x - centerX) * 10;
 
-                    headGroup.position.x += (tX - headGroup.position.x) * LERP_POS;
-                    headGroup.position.y += (tY - headGroup.position.y) * LERP_POS;
-                    headGroup.position.z += (tZ - headGroup.position.z) * LERP_POS;
+                    // --- 速度予測アルゴリズム ---
+                    if (dt > 0) {
+                        const velX = (targetX - lastPos.x) / dt;
+                        const velYaw = (targetYaw - lastRot) / dt;
 
-                    // 3. 向き計算 (左右・上下の反転修正)
-                    const yaw = (lm[1].x - headCenterX) * 8; 
-                    const pitch = (lm[1].y - headCenterY) * 7;
-                    
-                    headGroup.rotation.y += (yaw - headGroup.rotation.y) * LERP_ROT; // 左右振り反転
-                    headGroup.rotation.x += (-pitch - headGroup.rotation.x) * LERP_ROT; // 上下振り反転
+                        // 未来の位置を予測（PREDICTION_MS分だけ先読み）
+                        const predictX = targetX + velX * (PREDICTION_MS / 1000);
+                        const predictYaw = targetYaw + velYaw * (PREDICTION_MS / 1000);
 
-                    document.getElementById('pos-x').innerText = headGroup.position.x.toFixed(1);
-                    document.getElementById('rot-y').innerText = yaw.toFixed(2);
+                        // 補間（なめらかにしつつ追従性を維持）
+                        headGroup.position.x += (predictX - headGroup.position.x) * 0.3;
+                        headGroup.position.y += (targetY - headGroup.position.y) * 0.3;
+                        headGroup.position.z += (targetZ - headGroup.position.z) * 0.3;
+                        headGroup.rotation.y += (predictYaw - headGroup.rotation.y) * 0.4;
+
+                        document.getElementById('p-x').innerText = predictX.toFixed(2);
+                        document.getElementById('p-y').innerText = predictYaw.toFixed(2);
+                    }
+
+                    lastPos.set(targetX, targetY, targetZ);
+                    lastRot = targetYaw;
+                    lastTime = now;
                 }
             }
             requestAnimationFrame(predict);
@@ -203,22 +174,28 @@
 
         function animate() {
             requestAnimationFrame(animate);
-            orbit.update();
-            if (audio?.isPlaying) {
-                const level = analyser.getAverageFrequency() / 255;
-                coreMesh.scale.setScalar(1 + level * 1.5);
-                coreMesh.rotation.y += 0.01 + level * 0.1;
-                const dist = headGroup.position.distanceTo(coreMesh.position);
-                filterNode.frequency.setTargetAtTime(Math.max(200, 20000 - dist * 800), audio.context.currentTime, 0.1);
+            
+            // 音源のビジュアル演出
+            if (audio.isPlaying) {
+                const time = performance.now() * 0.001;
+                coreMesh.position.x = Math.sin(time * 0.5) * 8;
+                coreMesh.rotation.z += 0.01;
             }
+
             renderer.render(scene, camera);
         }
 
+        // --- UI Events ---
         document.getElementById('fileInput').addEventListener('change', (e) => {
-            new THREE.AudioLoader().load(URL.createObjectURL(e.target.files[0]), (buf) => {
-                audio.setBuffer(buf); audio.setLoop(true);
-                document.getElementById('playBtn').disabled = false;
-            });
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                new THREE.AudioLoader().load(ev.target.result, (buf) => {
+                    audio.setBuffer(buf);
+                    audio.setLoop(true);
+                    document.getElementById('playBtn').disabled = false;
+                });
+            };
+            reader.readAsDataURL(e.target.files[0]);
         });
 
         document.getElementById('playBtn').addEventListener('click', () => {
