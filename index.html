@@ -2,34 +2,34 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Ultimate Precision Calibration</title>
+    <title>Ultimate Precision: Orbit Calibration</title>
     <style>
         body { margin: 0; background: #000; overflow: hidden; font-family: sans-serif; color: #fff; }
-        #webgazerGazeDot { width: 5px !important; height: 5px !important; background: rgba(255,255,255,0.3) !important; }
+        #webgazerGazeDot { width: 4px !important; height: 4px !important; background: rgba(255,255,255,0.4) !important; border: none !important; }
 
         #target-container {
             position: absolute; width: 80px; height: 80px;
             transform: translate(-50%, -50%);
-            transition: all 0.8s cubic-bezier(0.19, 1, 0.22, 1);
-            opacity: 0; display: flex; align-items: center; justify-content: center;
+            transition: opacity 0.6s ease;
+            opacity: 0; display: flex; align-items: center; justify-content: center; z-index: 1000;
         }
         #target-core {
-            width: 15px; height: 15px; background: #fff; border-radius: 50%;
-            box-shadow: 0 0 25px 8px rgba(255, 255, 255, 0.9);
+            width: 16px; height: 16px; background: #fff; border-radius: 50%;
+            box-shadow: 0 0 30px 10px rgba(255, 255, 255, 0.8);
         }
         #timer-ring {
             position: absolute; width: 60px; height: 60px;
-            border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 50%;
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 50%;
         }
         #msg {
             position: fixed; width: 100%; text-align: center; bottom: 10%;
-            font-weight: 200; letter-spacing: 0.2em; opacity: 0.7;
+            font-weight: 200; letter-spacing: 0.2em; opacity: 0.6; pointer-events: none;
         }
     </style>
 </head>
 <body>
 
-<div id="msg">キャリブレーションを開始します...</div>
+<div id="msg">セットアップを開始します</div>
 <div id="target-container">
     <div id="timer-ring"></div>
     <div id="target-core"></div>
@@ -42,57 +42,87 @@
     const msg = document.getElementById('msg');
     const ring = document.getElementById('timer-ring');
     
-    // 精度を最大化する9点配置（マージンを10%持たせてカメラの死角を回避）
-    const points = [
-        {x: 50, y: 50}, // Center
-        {x: 10, y: 10}, {x: 50, y: 10}, {x: 90, y: 10}, // Top row
-        {x: 90, y: 50}, {x: 90, y: 90}, {x: 50, y: 90}, // Right & Bottom
-        {x: 10, y: 90}, {x: 10, y: 50}, // Left
-        {x: 50, y: 50}  // Final Center
+    const staticPoints = [
+        {x: 50, y: 50}, {x: 15, y: 15}, {x: 85, y: 15}, 
+        {x: 85, y: 85}, {x: 15, y: 85}, {x: 50, y: 15}, 
+        {x: 85, y: 50}, {x: 50, y: 85}, {x: 15, y: 50}
     ];
-    let currentPoint = 0;
+
+    let currentIdx = 0;
+    let isOrbiting = false;
 
     async function start() {
         await webgazer.setRegression('ridge').begin();
         webgazer.showVideoPreview(false).showPredictionPoints(true);
-        setTimeout(runCalibration, 2000);
+        setTimeout(runStaticCalibration, 1500);
     }
 
-    function runCalibration() {
-        if (currentPoint >= points.length) {
-            container.style.opacity = "0";
-            msg.innerText = "精度調整が完了しました";
+    // 1. 9点の静止画キャリブレーション
+    function runStaticCalibration() {
+        if (currentIdx >= staticPoints.length) {
+            currentIdx = 0;
+            setTimeout(startOrbitCalibration, 1000);
             return;
         }
 
-        const p = points[currentPoint];
-        const px = window.innerWidth * (p.x / 100);
-        const py = window.innerHeight * (p.y / 100);
-
-        container.style.left = px + "px";
-        container.style.top = py + "px";
-        container.style.opacity = "1";
-
-        let ticks = 0;
-        const duration = 80; // 50ms * 80回 = 4秒間 (より多くのサンプルを取得)
+        msg.innerText = "ドットをじっと見つめてください";
+        const p = staticPoints[currentIdx];
+        moveTarget(p.x, p.y);
         
+        let ticks = 0;
         const interval = setInterval(() => {
-            // 視線のデータを記録
-            webgazer.recordScreenPosition(px, py);
+            webgazer.recordScreenPosition(parseFloat(container.style.left), parseFloat(container.style.top));
             ticks++;
-
-            // リングのアニメーション
-            ring.style.transform = `scale(${1 - (ticks/duration)})`;
-            ring.style.opacity = 1 - (ticks/duration);
-
-            if (ticks >= duration) {
+            ring.style.transform = `scale(${1 - (ticks/40)})`;
+            if (ticks >= 40) {
                 clearInterval(interval);
-                container.style.opacity = "0.2";
-                currentPoint++;
-                setTimeout(runCalibration, 1000); // 移動のための十分な間隔
-                ring.style.transform = `scale(1)`;
+                currentIdx++;
+                runStaticCalibration();
             }
         }, 50);
+    }
+
+    // 2. 円軌道のキャリブレーション
+    function startOrbitCalibration() {
+        msg.innerText = "動き続けるドットを目で追いかけてください";
+        container.style.transition = "none"; // 円運動はスムーズにするためtransitionを切る
+        isOrbiting = true;
+        
+        let angle = 0;
+        const centerX = window.innerWidth / 2;
+        const centerY = window.innerHeight / 2;
+        const radius = Math.min(window.innerWidth, window.innerHeight) * 0.35;
+
+        const orbitInterval = setInterval(() => {
+            const px = centerX + radius * Math.cos(angle);
+            const py = centerY + radius * Math.sin(angle);
+            
+            container.style.left = px + "px";
+            container.style.top = py + "px";
+            container.style.opacity = "1";
+            
+            webgazer.recordScreenPosition(px, py);
+
+            angle += 0.02; // 回転速度
+            if (angle >= Math.PI * 2 * 2) { // 2周したら終了
+                clearInterval(orbitInterval);
+                finish();
+            }
+        }, 20);
+    }
+
+    function moveTarget(xPercent, yPercent) {
+        container.style.transition = "all 0.8s cubic-bezier(0.19, 1, 0.22, 1)";
+        container.style.left = (window.innerWidth * xPercent / 100) + "px";
+        container.style.top = (window.innerHeight * yPercent / 100) + "px";
+        container.style.opacity = "1";
+        ring.style.transform = `scale(1)`;
+    }
+
+    function finish() {
+        container.style.opacity = "0";
+        msg.innerText = "すべての調整が完了しました";
+        webgazer.showPredictionPoints(true); // 最後に赤い点を確認用に表示
     }
 
     window.onload = start;
