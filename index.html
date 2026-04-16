@@ -3,21 +3,29 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Spatial View Engine | Perspective Focus</title>
+    <title>Spatial View Engine | Dual Tracking</title>
     <style>
-        body { margin: 0; background: #000; overflow: hidden; font-family: monospace; }
+        body { margin: 0; background: #000; overflow: hidden; font-family: 'Courier New', Courier, monospace; }
         #container { position: absolute; inset: 0; }
-        #status { 
+        #hud { 
             position: absolute; top: 20px; left: 20px; color: #00f2ff; 
-            background: rgba(0,0,0,0.7); padding: 10px; border: 1px solid #00f2ff;
-            pointer-events: none; z-index: 100; font-size: 12px;
+            background: rgba(0, 5, 20, 0.8); padding: 15px; border-left: 4px solid #00f2ff;
+            pointer-events: none; z-index: 100; font-size: 11px; line-height: 1.6;
         }
+        .val { color: #fff; float: right; margin-left: 20px; }
         #webcam { display: none; }
     </style>
 </head>
 <body>
 
-    <div id="status">INITIALIZING AI...</div>
+    <div id="hud">
+        <div style="font-weight: bold; margin-bottom: 5px;">ENGINE STATUS: <span id="status">INIT</span></div>
+        <hr border="0" style="border-top:1px solid #004455; margin: 10px 0;">
+        <div>POS-X (Move) <span id="pos-x" class="val">0.0</span></div>
+        <div>POS-Y (Move) <span id="pos-y" class="val">0.0</span></div>
+        <div>YAW   (Turn) <span id="rot-y" class="val">0.0</span></div>
+        <div>PITCH (Tilt) <span id="rot-x" class="val">0.0</span></div>
+    </div>
     <div id="container"></div>
     <video id="webcam" autoplay playsinline></video>
 
@@ -35,16 +43,18 @@
 
         let scene, camera, renderer, faceLandmarker;
         const video = document.getElementById('webcam');
-        const status = document.getElementById('status');
-
-        // スムージング用変数
-        let targetPos = new THREE.Vector3(0, 0, 15);
-        let currentPos = new THREE.Vector3(0, 0, 15);
+        
+        // トラッキング値（現在値とターゲット）
+        let state = {
+            pos: new THREE.Vector3(0, 0, 15),
+            rot: new THREE.Euler(0, 0, 0),
+            targetPos: new THREE.Vector3(0, 0, 15),
+            targetRot: new THREE.Euler(0, 0, 0)
+        };
 
         async function init() {
-            // --- Scene Setup ---
             scene = new THREE.Scene();
-            scene.fog = new THREE.Fog(0x000000, 10, 50);
+            scene.fog = new THREE.FogExp2(0x00050a, 0.02);
 
             camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
             
@@ -53,38 +63,19 @@
             renderer.setPixelRatio(window.devicePixelRatio);
             document.getElementById('container').appendChild(renderer.domElement);
 
-            // --- 視覚的要素（奥行きを感じさせるための配置） ---
-            // 1. 床と天井のグリッド
-            const gridTop = new THREE.GridHelper(100, 20, 0x00f2ff, 0x002233);
-            gridTop.position.y = 10;
-            scene.add(gridTop);
+            // --- 空間構築 ---
+            const grid = new THREE.GridHelper(200, 50, 0x00f2ff, 0x001122);
+            grid.position.y = -5;
+            scene.add(grid);
 
-            const gridBottom = new THREE.GridHelper(100, 20, 0x00f2ff, 0x002233);
-            gridBottom.position.y = -10;
-            scene.add(gridBottom);
-
-            // 2. 空間に浮かぶ構造体
-            for (let i = 0; i < 50; i++) {
-                const geometry = new THREE.BoxGeometry(1, 1, 1);
+            // オブジェクトの散布
+            const geometry = new THREE.BoxGeometry(1, 1, 1);
+            for (let i = 0; i < 60; i++) {
                 const material = new THREE.MeshBasicMaterial({ color: 0x00f2ff, wireframe: true });
                 const cube = new THREE.Mesh(geometry, material);
-                cube.position.set(
-                    (Math.random() - 0.5) * 40,
-                    (Math.random() - 0.5) * 20,
-                    (Math.random() - 0.5) * 40 - 10
-                );
+                cube.position.set((Math.random()-0.5)*50, (Math.random()-0.5)*30, (Math.random()-0.5)*50);
                 scene.add(cube);
             }
-
-            // 3. 遠くの光（パーティクル）
-            const starGeo = new THREE.BufferGeometry();
-            const starCoords = [];
-            for (let i = 0; i < 1000; i++) {
-                starCoords.push((Math.random() - 0.5) * 100, (Math.random() - 0.5) * 100, (Math.random() - 0.5) * 100);
-            }
-            starGeo.setAttribute('position', new THREE.Float32BufferAttribute(starCoords, 3));
-            const starMat = new THREE.PointsMaterial({ color: 0xffffff, size: 0.1 });
-            scene.add(new THREE.Points(starGeo, starMat));
 
             await setupTracking();
             animate();
@@ -102,11 +93,11 @@
                 video.srcObject = stream;
                 video.onloadedmetadata = () => {
                     video.play();
-                    status.innerText = "TRACKING ACTIVE - MOVE YOUR HEAD";
+                    document.getElementById('status').innerText = "STABLE";
                     predict();
                 };
             } catch (e) {
-                status.innerText = "ERROR: " + e.message;
+                document.getElementById('status').innerText = "ERROR";
             }
         }
 
@@ -116,17 +107,29 @@
                 if (results.faceLandmarks?.[0]) {
                     const lm = results.faceLandmarks[0];
 
-                    // 顔の中心座標 (0.0 - 1.0)
-                    const centerX = (lm[234].x + lm[454].x) / 2;
-                    const centerY = (lm[234].y + lm[454].y) / 2;
+                    // 1. 顔の中心（位置移動用）
+                    const headX = (lm[234].x + lm[454].x) / 2;
+                    const headY = (lm[234].y + lm[454].y) / 2;
                     const faceWidth = Math.abs(lm[454].x - lm[234].x);
 
-                    // --- カメラ座標の計算 (Window Effect) ---
-                    // 頭を右に動かす(centerXが小さくなる)と、カメラは右に移動する
-                    targetPos.x = (0.5 - centerX) * 30; 
-                    targetPos.y = (0.5 - centerY) * 20;
-                    // 顔の大きさで前後移動 (Z軸)
-                    targetPos.z = (0.15 / faceWidth) * 10 + 5;
+                    // --- 位置 (Position) の計算 ---
+                    state.targetPos.x = (0.5 - headX) * 25; // 左右移動
+                    state.targetPos.y = (0.5 - headY) * 15; // 上下移動
+                    state.targetPos.z = (0.15 / faceWidth) * 12 + 5; // 奥行き
+
+                    // --- 傾き (Rotation) の計算 ---
+                    // 鼻(1)と中心のズレから向きを判定
+                    const yaw = (lm[1].x - headX) * 5; 
+                    const pitch = (lm[1].y - headY) * 4;
+
+                    state.targetRot.y = yaw;
+                    state.targetRot.x = -pitch;
+
+                    // HUD更新
+                    document.getElementById('pos-x').innerText = state.targetPos.x.toFixed(1);
+                    document.getElementById('pos-y').innerText = state.targetPos.y.toFixed(1);
+                    document.getElementById('rot-y').innerText = yaw.toFixed(2);
+                    document.getElementById('rot-x').innerText = pitch.toFixed(2);
                 }
             }
             requestAnimationFrame(predict);
@@ -135,13 +138,13 @@
         function animate() {
             requestAnimationFrame(animate);
 
-            // イージング（滑らかな追従）
-            currentPos.lerp(targetPos, 0.1);
+            // 滑らかな補間 (Lerp)
+            state.pos.lerp(state.targetPos, 0.1);
             
-            camera.position.copy(currentPos);
-            
-            // 常に中心（0,0,0）を見つめることで、覗き込み効果を出す
-            camera.lookAt(0, 0, -5);
+            // 回転の補間
+            camera.position.copy(state.pos);
+            camera.rotation.x += (state.targetRot.x - camera.rotation.x) * 0.1;
+            camera.rotation.y += (state.targetRot.y - camera.rotation.y) * 0.1;
 
             renderer.render(scene, camera);
         }
