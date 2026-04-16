@@ -3,26 +3,29 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Acoustic Master: Cathedral</title>
+    <title>Acoustic Zen Master</title>
     <style>
-        :root { --gold: #d4af37; --bg: #000; --grid: rgba(212, 175, 55, 0.1); --cyan: #00f2ff; }
+        :root { --gold: #d4af37; --bg: #000; --grid: rgba(212, 175, 55, 0.08); --cyan: #00f2ff; }
         body {
             margin: 0; background: var(--bg); color: white;
-            font-family: 'Inter', sans-serif; display: flex; flex-direction: column;
-            align-items: center; min-height: 100vh; touch-action: none; padding: 20px;
+            font-family: 'Inter', -apple-system, sans-serif;
+            display: flex; flex-direction: column; align-items: center;
+            min-height: 100vh; touch-action: none;
         }
-        .header { text-align: center; margin-bottom: 20px; }
-        .header h1 { font-size: 0.7rem; letter-spacing: 8px; color: var(--gold); text-transform: uppercase; margin: 0; }
         
+        .header { margin-top: 30px; text-align: center; }
+        .header h1 { font-size: 0.6rem; letter-spacing: 10px; color: var(--gold); text-transform: uppercase; margin: 0; }
+        .header p { font-size: 0.5rem; color: #444; margin-top: 5px; }
+
         .console {
-            display: flex; flex-direction: column; gap: 15px; padding: 25px;
-            background: linear-gradient(145deg, #0f0f0f, #050505);
-            border-radius: 30px; border: 1px solid #1a1a1a; box-shadow: 0 50px 100px rgba(0,0,0,0.9);
+            display: flex; flex-direction: column; gap: 20px; margin-top: 20px;
+            padding: 20px; background: #080808; border-radius: 30px; border: 1px solid #111;
         }
 
         .grid-container {
-            position: relative; width: 300px; background: #020202;
-            border: 1px solid #222; border-radius: 12px; overflow: hidden;
+            position: relative; width: 320px; background: #050505;
+            border: 1px solid #222; border-radius: 15px; overflow: hidden;
+            box-shadow: inset 0 0 30px rgba(0,0,0,1);
         }
 
         .mesh {
@@ -31,110 +34,114 @@
             background-size: 20px 20px;
         }
 
+        /* 黄金の十字線 */
+        .cross-h { position: absolute; width: 100%; height: 1px; top: 50%; background: rgba(212,175,55,0.2); }
+        .cross-v { position: absolute; height: 100%; width: 1px; left: 50%; background: rgba(212,175,55,0.2); }
+
+        .label { position: absolute; font-size: 0.5rem; color: #444; letter-spacing: 2px; pointer-events: none; }
+        
         .node {
-            position: absolute; width: 12px; height: 12px; background: var(--gold);
+            position: absolute; width: 14px; height: 14px; background: var(--gold);
             border-radius: 50%; transform: translate(-50%, -50%);
-            box-shadow: 0 0 20px var(--gold); z-index: 10;
+            box-shadow: 0 0 25px var(--gold), 0 0 50px rgba(212,175,55,0.3);
+            z-index: 10; transition: width 0.2s, height 0.2s;
         }
+        .node::after {
+            content: ''; position: absolute; top: -10px; left: -10px; right: -10px; bottom: -10px;
+            border: 1px solid var(--gold); border-radius: 50%; opacity: 0.2; animation: pulse 2s infinite;
+        }
+        @keyframes pulse { 0% { transform: scale(1); opacity: 0.3; } 100% { transform: scale(2); opacity: 0; } }
 
         .head-core {
-            position: absolute; top: 50%; left: 50%; width: 6px; height: 6px;
+            position: absolute; top: 50%; left: 50%; width: 8px; height: 8px;
             background: var(--cyan); border-radius: 50%; transform: translate(-50%, -50%);
-            box-shadow: 0 0 10px var(--cyan);
+            box-shadow: 0 0 15px var(--cyan);
         }
 
-        .readout { font-family: monospace; font-size: 0.6rem; color: var(--gold); display: flex; justify-content: space-between; }
-        
-        .upload-btn {
-            background: var(--gold); color: black; border: none; padding: 12px;
-            border-radius: 8px; font-size: 0.7rem; font-weight: bold; cursor: pointer; text-align: center;
+        .readout {
+            font-family: 'Courier New', monospace; font-size: 0.65rem; color: var(--gold);
+            display: flex; justify-content: space-between; padding: 0 10px;
         }
+
         #fileInput { display: none; }
+        .upload-btn {
+            background: none; border: 1px solid #333; color: #888; padding: 10px 20px;
+            border-radius: 5px; font-size: 0.6rem; cursor: pointer; transition: 0.3s;
+        }
+        .upload-btn:hover { border-color: var(--gold); color: white; }
     </style>
 </head>
 <body>
 
 <div class="header">
-    <h1>Convolver Reverb Engine</h1>
+    <h1>Acoustic Space Control</h1>
+    <p>Professional Binaural Synthesis Engine</p>
 </div>
 
 <div class="console">
     <div class="readout">
         <span id="pos-x">X: 0.00</span>
+        <span id="pos-y">Y: 0.00</span>
         <span id="pos-z">Z: 0.00</span>
-        <span id="reverb-mix">REVERB: 100%</span>
     </div>
 
-    <div class="grid-container" id="gridXZ" style="height: 300px;">
+    <div class="grid-container" id="gridXZ" style="height: 320px;">
         <div class="mesh"></div>
+        <div class="cross-h"></div><div class="cross-v"></div>
+        <div class="label" style="top:10px; left:50%; transform:translateX(-50%);">FORWARD (-Z)</div>
+        <div class="label" style="bottom:10px; left:50%; transform:translateX(-50%);">BACKWARD (+Z)</div>
         <div class="head-core"></div>
         <div class="node" id="nodeXZ" style="top:50%; left:50%;"></div>
     </div>
 
-    <div class="grid-container" id="gridXY" style="height: 100px;">
+    <div class="grid-container" id="gridXY" style="height: 120px;">
         <div class="mesh"></div>
+        <div class="cross-h"></div><div class="cross-v"></div>
+        <div class="label" style="top:10px; left:50%; transform:translateX(-50%);">ZENITH (+Y)</div>
+        <div class="label" style="bottom:10px; left:50%; transform:translateX(-50%);">NADIR (-Y)</div>
         <div class="head-core"></div>
         <div class="node" id="nodeXY" style="top:50%; left:50%;"></div>
     </div>
 
-    <label class="upload-btn" for="fileInput">SELECT AUDIO SOURCE</label>
+    <label class="upload-btn" for="fileInput">LOAD MASTER SOURCE</label>
     <input type="file" id="fileInput" accept="audio/*">
 </div>
 
 <script>
-    let audioCtx, panner, source, filter, convolver, wetGain, dryGain;
+    let audioCtx, panner, source, filter;
     let coord = { x: 0, y: 0, z: 0 };
 
-    // 数式で「大聖堂の響き」のインパルス応答を生成する関数
-    function createImpulseResponse(duration, decay) {
-        const sampleRate = audioCtx.sampleRate;
-        const length = sampleRate * duration;
-        const impulse = audioCtx.createBuffer(2, length, sampleRate);
-        for (let i = 0; i < 2; i++) {
-            const channelData = impulse.getChannelData(i);
-            for (let j = 0; j < length; j++) {
-                // 指数関数的に減衰するホワイトノイズ
-                channelData[j] = (Math.random() * 2 - 1) * Math.pow(1 - j / length, decay);
-            }
-        }
-        return impulse;
-    }
+    const nodeXZ = document.getElementById('nodeXZ');
+    const nodeXY = document.getElementById('nodeXY');
 
     async function initAudio(file) {
-        if (audioCtx) audioCtx.close();
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         
-        // Panner (HRTF)
+        // 1. Panner (HRTF)
         panner = audioCtx.createPanner();
         panner.panningModel = 'HRTF';
+        panner.distanceModel = 'inverse';
+        panner.refDistance = 1;
+        panner.maxDistance = 10000;
+        panner.rolloffFactor = 1.5; // 距離による減衰を少し強めに
 
-        // Reverb (Convolver)
-        convolver = audioCtx.createConvolver();
-        convolver.buffer = createImpulseResponse(4.0, 6.0); // 4秒の長い残響
-
-        // Mix Control
-        dryGain = audioCtx.createGain();
-        wetGain = audioCtx.createGain();
-        dryGain.gain.value = 0.6; // 直接音
-        wetGain.gain.value = 0.5; // 残響音（ここを上げるとリバーブが深くなる）
+        // 2. 距離による「こもり」を再現するフィルタ
+        filter = audioCtx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.value = 20000;
 
         const buffer = await file.arrayBuffer();
         const audioData = await audioCtx.decodeAudioData(buffer);
         
+        if (source) source.stop();
         source = audioCtx.createBufferSource();
         source.buffer = audioData;
         source.loop = true;
 
-        // 接続
-        // Source -> Panner -> Destination (Direct)
-        // Source -> Panner -> Convolver -> WetGain -> Destination (Reverb)
-        source.connect(panner);
-        panner.connect(dryGain);
-        dryGain.connect(audioCtx.destination);
-
-        panner.connect(convolver);
-        convolver.connect(wetGain);
-        wetGain.connect(audioCtx.destination);
+        // 接続: Source -> Filter -> Panner -> Destination
+        source.connect(filter);
+        filter.connect(panner);
+        panner.connect(audioCtx.destination);
         
         source.start();
         update();
@@ -142,19 +149,33 @@
 
     function update() {
         if (!panner) return;
-        const scale = 30;
-        const now = audioCtx.currentTime;
-        panner.positionX.setTargetAtTime(coord.x * scale, now, 0.1);
-        panner.positionY.setTargetAtTime(coord.y * scale, now, 0.1);
-        panner.positionZ.setTargetAtTime(coord.z * scale, now, 0.1);
 
+        const scale = 25; 
+        const realX = coord.x * scale;
+        const realY = coord.y * scale;
+        const realZ = coord.z * scale;
+
+        // 座標の反映（滑らかに）
+        const now = audioCtx.currentTime;
+        panner.positionX.setTargetAtTime(realX, now, 0.08);
+        panner.positionY.setTargetAtTime(realY, now, 0.08);
+        panner.positionZ.setTargetAtTime(realZ, now, 0.08);
+
+        // 【リアルさのキモ】距離による高域の減衰
+        // 遠くなるほど音がこもる（空気が高音を吸収する現象の再現）
+        const distance = Math.sqrt(realX**2 + realY**2 + realZ**2);
+        const cutoff = Math.max(2000, 20000 - (distance * 400));
+        filter.frequency.setTargetAtTime(cutoff, now, 0.1);
+
+        // UI同期
         nodeXZ.style.left = ((coord.x + 1) / 2 * 100) + '%';
         nodeXZ.style.top = ((coord.z + 1) / 2 * 100) + '%';
         nodeXY.style.left = ((coord.x + 1) / 2 * 100) + '%';
         nodeXY.style.top = ((-coord.y + 1) / 2 * 100) + '%';
 
-        document.getElementById('pos-x').innerText = `X: ${(coord.x * scale).toFixed(1)}`;
-        document.getElementById('pos-z').innerText = `Z: ${(coord.z * scale).toFixed(1)}`;
+        document.getElementById('pos-x').innerText = `X: ${realX.toFixed(2)}`;
+        document.getElementById('pos-y').innerText = `Y: ${realY.toFixed(2)}`;
+        document.getElementById('pos-z').innerText = `Z: ${realZ.toFixed(2)}`;
     }
 
     function handleDrag(grid, type) {
@@ -165,9 +186,11 @@
             const touch = e.touches ? e.touches[0] : e;
             const nx = (touch.clientX - rect.left) / rect.width * 2 - 1;
             const ny = (touch.clientY - rect.top) / rect.height * 2 - 1;
+            
             coord.x = Math.max(-1, Math.min(1, nx));
             if(type === 'XZ') coord.z = Math.max(-1, Math.min(1, ny));
             else coord.y = -Math.max(-1, Math.min(1, ny));
+            
             update();
         };
         grid.addEventListener('mousedown', () => { isDown = true; audioCtx?.resume(); });
