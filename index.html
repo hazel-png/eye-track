@@ -2,110 +2,96 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>iPhone風アイトラッキング校正</title>
+    <title>タイマー式・アイトラッキング校正</title>
     <style>
-        body { margin: 0; background: #000; overflow: hidden; font-family: sans-serif; }
+        body { margin: 0; background: #000; overflow: hidden; font-family: sans-serif; color: white; }
         
-        /* 視線の赤い点 */
+        /* 視線のドット */
         #webgazerGazeDot {
-            width: 12px !important; height: 12px !important;
+            width: 10px !important; height: 10px !important;
             background: #ff3b30 !important; border: none !important;
-            box-shadow: 0 0 15px #ff3b30; z-index: 10000 !important;
+            z-index: 10001 !important;
         }
 
-        /* iPhone風のターゲットドット */
-        .target {
-            position: absolute; width: 40px; height: 40px;
-            background: rgba(255, 255, 255, 0.2);
-            border: 2px solid #fff; border-radius: 50%;
-            transform: translate(-50%, -50%); display: none;
-            transition: all 0.3s ease;
+        /* タイマーターゲット */
+        #target {
+            position: absolute; width: 50px; height: 50px;
+            background: none; border: 3px solid #fff; border-radius: 50%;
+            transform: translate(-50%, -50%); display: none; z-index: 10000;
         }
-        .target.active { background: #fff; transform: translate(-50%, -50%) scale(1.2); }
+        
+        /* タイマーのプログレス（中心の点） */
+        #target::after {
+            content: ""; position: absolute; top: 50%; left: 50%;
+            width: 10px; height: 10px; background: #fff;
+            border-radius: 50%; transform: translate(-50%, -50%);
+        }
 
-        #instructions {
-            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            color: white; text-align: center; font-size: 1.2rem;
+        #msg {
+            position: fixed; width: 100%; text-align: center;
+            top: 45%; font-size: 1.5rem; pointer-events: none;
         }
     </style>
 </head>
 <body>
 
-<div id="instructions">カメラを許可してください</div>
-<div id="t1" class="target" style="top: 10%; left: 10%;"></div>
-<div id="t2" class="target" style="top: 10%; left: 90%;"></div>
-<div id="t3" class="target" style="top: 90%; left: 10%;"></div>
-<div id="t4" class="target" style="top: 90%; left: 90%;"></div>
-<div id="t5" class="target" style="top: 50%; left: 50%;"></div>
+<div id="msg">カメラを起動中...</div>
+<div id="target"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/webgazer@2.1.0/dist/webgazer.js"></script>
 
 <script>
-    let currentTarget = 1;
-    let stayCount = 0;
-    const requiredStay = 20; // 見つめ続ける時間（フレーム数）
+    const target = document.getElementById('target');
+    const msg = document.getElementById('msg');
+    
+    // 校正ポイント（全9箇所）
+    const points = [
+        {x: 10, y: 10}, {x: 50, y: 10}, {x: 90, y: 10},
+        {x: 10, y: 50}, {x: 50, y: 50}, {x: 90, y: 50},
+        {x: 10, y: 90}, {x: 50, y: 90}, {x: 90, y: 90}
+    ];
+    let currentPoint = 0;
 
-    async function startCalibration() {
-        document.getElementById('instructions').innerText = "表示されるドットを見つめてください";
-        showTarget(currentTarget);
-
-        await webgazer.setRegression('ridge')
-            .setGazeListener((data, clock) => {
-                if (data == null) return;
-                checkTarget(data.x, data.y);
-            })
-            .begin();
-
+    async function start() {
+        await webgazer.setRegression('ridge').begin();
         webgazer.showVideoPreview(false).showPredictionPoints(true);
+        
+        msg.innerText = "ドットを目で追いかけてください";
+        target.style.display = "block";
+        runTimerCalibration();
     }
 
-    function showTarget(n) {
-        document.querySelectorAll('.target').forEach(t => t.style.display = 'none');
-        const target = document.getElementById('t' + n);
-        if (target) target.style.display = 'block';
-    }
-
-    function checkTarget(gx, gy) {
-        const target = document.getElementById('t' + currentTarget);
-        if (!target) return;
-
-        const rect = target.getBoundingClientRect();
-        const tx = rect.left + rect.width / 2;
-        const ty = rect.top + rect.height / 2;
-
-        // 視線がターゲットの近くにあるか判定
-        const dist = Math.hypot(gx - tx, gy - ty);
-        if (dist < 80) { // 判定距離
-            stayCount++;
-            target.classList.add('active');
-            
-            // 学習を強化
-            webgazer.recordScreenPosition(tx, ty);
-
-            if (stayCount > requiredStay) {
-                currentTarget++;
-                stayCount = 0;
-                target.classList.remove('active');
-                if (currentTarget <= 5) {
-                    showTarget(currentTarget);
-                } else {
-                    finishCalibration();
-                }
-            }
-        } else {
-            stayCount = 0;
-            target.classList.remove('active');
+    function runTimerCalibration() {
+        if (currentPoint >= points.length) {
+            target.style.display = "none";
+            msg.innerText = "校正が完了しました";
+            return;
         }
+
+        const p = points[currentPoint];
+        const px = window.innerWidth * (p.x / 100);
+        const py = window.innerHeight * (p.y / 100);
+
+        // ターゲットを移動
+        target.style.left = px + "px";
+        target.style.top = py + "px";
+
+        // 3秒間、その場所を学習させ続ける（50msごと）
+        let ticks = 0;
+        const interval = setInterval(() => {
+            webgazer.recordScreenPosition(px, py);
+            ticks++;
+            
+            // 3秒（50ms * 60回）経過したら次の点へ
+            if (ticks >= 60) {
+                clearInterval(interval);
+                currentPoint++;
+                runTimerCalibration();
+            }
+        }, 50);
     }
 
-    function finishCalibration() {
-        document.querySelectorAll('.target').forEach(t => t.style.display = 'none');
-        document.getElementById('instructions').innerHTML = "校正完了！<br>視線がスムーズに追従します";
-        setTimeout(() => { document.getElementById('instructions').style.display = 'none'; }, 3000);
-    }
-
-    window.onload = startCalibration;
+    window.onload = start;
 </script>
-
 </body>
 </html>
