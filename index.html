@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>アイトラッキング（顔非表示・安定版）</title>
+    <style>
+        body { 
+            margin: 0; padding: 0; overflow: hidden; 
+            background-color: #f0f0f0; width: 100vw; height: 100vh;
+        }
+        #status {
+            position: fixed; top: 10px; left: 10px; z-index: 9999;
+            background: rgba(0,0,0,0.8); color: white; padding: 15px;
+            font-family: sans-serif; border-radius: 8px;
+            pointer-events: none; line-height: 1.5;
+        }
+        /* 視線のドットを強調 */
+        #webgazerGazeDot {
+            width: 20px !important;
+            height: 20px !important;
+            background-color: #ff0000 !important;
+            border: 3px solid #ffffff !important;
+            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+            display: block !important; /* 強制表示 */
+        }
+        /* カメラプレビュー用の要素を物理的に隠す（念のため） */
+        #webgazerVideoContainer, #webgazerVideoFeed, #webgazerFaceOverlay, #webgazerFaceFeedbackBox {
+            display: none !important;
+            visibility: hidden !important;
+            opacity: 0 !important;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="status">
+        【動作手順】<br>
+        1. カメラの使用を許可する<br>
+        2. 画面の<b>あちこちをクリック</b>しながら、その点を見つめる<br>
+        3. 赤い点が視線に追従し始めます
+    </div>
+
+    <script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
+
+    <script>
+        async function initGazer() {
+            // ステータス更新
+            const status = document.getElementById('status');
+
+            try {
+                await webgazer.setRegression('ridge')
+                    .setGazeListener((data, elapsedTime) => {
+                        if (data == null) return;
+                        // data.x, data.y で座標取得可能
+                    })
+                    .begin();
+
+                // プレビューをオフ、ポイント表示をオン
+                webgazer.showVideoPreview(false)
+                        .showPredictionPoints(true)
+                        .applyKalmanFilter(true);
+
+                status.style.background = "rgba(0,100,0,0.8)";
+                status.innerHTML = "トラッキング中...<br>画面内を数回クリックして精度を高めてください。";
+
+            } catch (err) {
+                status.style.background = "rgba(150,0,0,0.8)";
+                status.innerHTML = "エラー: カメラの起動に失敗しました。<br>HTTPS環境か localhost で試してください。";
+                console.error(err);
+            }
+        }
+
+        // ページ読み込み完了時に実行
+        window.addEventListener('DOMContentLoaded', initGazer);
+
+        // 終了処理
+        window.onbeforeunload = () => {
+            webgazer.end();
+        };
+    </script>
+</body>
+</html>
