@@ -2,46 +2,34 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Vision Pro Style Calibration</title>
+    <title>Ultimate Precision Calibration</title>
     <style>
-        body { margin: 0; background: #000; overflow: hidden; font-family: "Helvetica Neue", Arial, sans-serif; color: #fff; }
-        
-        /* 視線の赤い点は極限まで小さく、または隠す（Vision Pro風なら見えない方が没入感が出ます） */
-        #webgazerGazeDot {
-            width: 4px !important; height: 4px !important;
-            background: rgba(255, 255, 255, 0.5) !important; border: none !important;
-        }
+        body { margin: 0; background: #000; overflow: hidden; font-family: sans-serif; color: #fff; }
+        #webgazerGazeDot { width: 5px !important; height: 5px !important; background: rgba(255,255,255,0.3) !important; }
 
-        /* 光るドットの外枠 */
         #target-container {
-            position: absolute; width: 60px; height: 60px;
+            position: absolute; width: 80px; height: 80px;
             transform: translate(-50%, -50%);
-            transition: opacity 0.6s ease-in-out, left 0.6s cubic-bezier(0.4, 0, 0.2, 1), top 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+            transition: all 0.8s cubic-bezier(0.19, 1, 0.22, 1);
             opacity: 0; display: flex; align-items: center; justify-content: center;
         }
-
-        /* 中心の発光ドット */
         #target-core {
-            width: 12px; height: 12px; background: #fff; border-radius: 50%;
-            box-shadow: 0 0 20px 5px rgba(255, 255, 255, 0.8);
+            width: 15px; height: 15px; background: #fff; border-radius: 50%;
+            box-shadow: 0 0 25px 8px rgba(255, 255, 255, 0.9);
         }
-
-        /* タイマーリング */
         #timer-ring {
-            position: absolute; width: 50px; height: 50px;
-            border: 2px solid rgba(255, 255, 255, 0.3); border-radius: 50%;
+            position: absolute; width: 60px; height: 60px;
+            border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 50%;
         }
-
         #msg {
-            position: fixed; width: 100%; text-align: center; bottom: 15%;
-            font-size: 1.2rem; font-weight: 200; letter-spacing: 0.1em;
-            transition: opacity 1s; opacity: 0.8;
+            position: fixed; width: 100%; text-align: center; bottom: 10%;
+            font-weight: 200; letter-spacing: 0.2em; opacity: 0.7;
         }
     </style>
 </head>
 <body>
 
-<div id="msg">カメラをセットアップ中...</div>
+<div id="msg">キャリブレーションを開始します...</div>
 <div id="target-container">
     <div id="timer-ring"></div>
     <div id="target-core"></div>
@@ -52,28 +40,28 @@
 <script>
     const container = document.getElementById('target-container');
     const msg = document.getElementById('msg');
+    const ring = document.getElementById('timer-ring');
     
-    // Vision Pro風の6点＋中央の配置
+    // 精度を最大化する9点配置（マージンを10%持たせてカメラの死角を回避）
     const points = [
         {x: 50, y: 50}, // Center
-        {x: 20, y: 25}, {x: 80, y: 25},
-        {x: 80, y: 75}, {x: 20, y: 75},
-        {x: 50, y: 50}  // Final Center check
+        {x: 10, y: 10}, {x: 50, y: 10}, {x: 90, y: 10}, // Top row
+        {x: 90, y: 50}, {x: 90, y: 90}, {x: 50, y: 90}, // Right & Bottom
+        {x: 10, y: 90}, {x: 10, y: 50}, // Left
+        {x: 50, y: 50}  // Final Center
     ];
     let currentPoint = 0;
 
     async function start() {
         await webgazer.setRegression('ridge').begin();
         webgazer.showVideoPreview(false).showPredictionPoints(true);
-        
-        msg.innerText = "ドットをじっと見つめてください";
         setTimeout(runCalibration, 2000);
     }
 
     function runCalibration() {
         if (currentPoint >= points.length) {
             container.style.opacity = "0";
-            msg.innerText = "セットアップ完了";
+            msg.innerText = "精度調整が完了しました";
             return;
         }
 
@@ -81,27 +69,28 @@
         const px = window.innerWidth * (p.x / 100);
         const py = window.innerHeight * (p.y / 100);
 
-        // 表示と移動
         container.style.left = px + "px";
         container.style.top = py + "px";
         container.style.opacity = "1";
 
         let ticks = 0;
-        const duration = 50; // 50ms * 40回 = 2秒間
+        const duration = 80; // 50ms * 80回 = 4秒間 (より多くのサンプルを取得)
         
         const interval = setInterval(() => {
+            // 視線のデータを記録
             webgazer.recordScreenPosition(px, py);
             ticks++;
 
-            // リングを少しずつ縮める演出（オプション）
-            document.getElementById('timer-ring').style.transform = `scale(${1 - (ticks/duration)})`;
+            // リングのアニメーション
+            ring.style.transform = `scale(${1 - (ticks/duration)})`;
+            ring.style.opacity = 1 - (ticks/duration);
 
             if (ticks >= duration) {
                 clearInterval(interval);
-                container.style.opacity = "0"; // 一旦消す演出
+                container.style.opacity = "0.2";
                 currentPoint++;
-                setTimeout(runCalibration, 800); // 次の点へ行く前のタメ
-                document.getElementById('timer-ring').style.transform = `scale(1)`;
+                setTimeout(runCalibration, 1000); // 移動のための十分な間隔
+                ring.style.transform = `scale(1)`;
             }
         }, 50);
     }
