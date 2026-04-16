@@ -3,28 +3,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Advanced Spatial Engine | Pro</title>
+    <title>Fixed Spatial Engine</title>
     <style>
-        :root { --accent: #00f2ff; --bg: #020205; --glass: rgba(10, 10, 25, 0.85); }
-        body { margin: 0; background: var(--bg); color: var(--accent); font-family: 'Consolas', monospace; overflow: hidden; }
+        :root { --accent: #00f2ff; --bg: #020205; }
+        body { margin: 0; background: var(--bg); color: var(--accent); font-family: monospace; overflow: hidden; }
         #container { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; }
-        #overlay { 
-            position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
-            pointer-events: none; z-index: 10; display: flex; flex-direction: column; 
-            justify-content: space-between; padding: 30px; box-sizing: border-box; 
-        }
-        .panel { background: var(--glass); border: 1px solid var(--accent); padding: 15px; border-radius: 4px; pointer-events: auto; }
-        .ui-bottom { display: flex; justify-content: center; gap: 20px; align-items: center; }
-        .btn { 
-            cursor: pointer; padding: 12px 25px; background: transparent; 
-            border: 1px solid var(--accent); color: var(--accent); border-radius: 2px;
-            transition: 0.2s; font-size: 12px; letter-spacing: 2px;
-        }
-        .btn:hover { background: var(--accent); color: #000; }
-        .btn:disabled { opacity: 0.3; }
+        #overlay { position: absolute; inset: 0; pointer-events: none; z-index: 10; display: flex; flex-direction: column; justify-content: space-between; padding: 20px; box-sizing: border-box; }
+        .panel { background: rgba(10, 10, 25, 0.9); border: 1px solid var(--accent); padding: 10px; pointer-events: auto; font-size: 12px; }
+        .ui-bottom { display: flex; justify-content: center; gap: 15px; pointer-events: auto; padding-bottom: 20px; }
+        .btn { cursor: pointer; padding: 15px 30px; background: none; border: 1px solid var(--accent); color: var(--accent); font-weight: bold; transition: 0.2s; }
+        .btn:hover:not(:disabled) { background: var(--accent); color: #000; }
+        .btn:disabled { opacity: 0.3; cursor: not-allowed; border-color: #555; color: #555; }
+        #log { color: #ff00f2; margin-top: 5px; font-size: 10px; }
         #webcam { display: none; }
-        .stat { font-size: 10px; margin: 5px 0; display: flex; justify-content: space-between; width: 180px; }
-        .stat span { color: #fff; }
     </style>
 </head>
 <body>
@@ -33,16 +24,18 @@
     <video id="webcam" autoplay playsinline></video>
 
     <div id="overlay">
-        <div class="panel" style="width: fit-content;">
-            <div style="color: #ff00f2; margin-bottom: 10px;">CORE TRACKING ACTIVE</div>
-            <div class="stat">LATENCY COMP: <span id="comp">ON</span></div>
-            <div class="stat">PREDICTED X: <span id="p-x">0.0</span></div>
-            <div class="stat">PREDICTED YAW: <span id="p-y">0.0</span></div>
+        <div class="panel">
+            <div>SYSTEM STATUS</div>
+            <div id="log">WAITING FOR USER...</div>
+            <div id="track-info" style="margin-top:10px; color:#fff;"></div>
         </div>
 
         <div class="ui-bottom">
-            <label class="btn">LOAD AUDIO<input type="file" id="fileInput" accept="audio/*" style="display:none;"></label>
-            <button id="playBtn" class="btn" disabled>INITIALIZING...</button>
+            <label class="btn">
+                1. SELECT AUDIO
+                <input type="file" id="fileInput" accept="audio/*" style="display:none;">
+            </label>
+            <button id="playBtn" class="btn" disabled>2. START ENGINE</button>
         </div>
     </div>
 
@@ -60,70 +53,64 @@
         import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3";
 
         let scene, camera, renderer, audio, listener, headGroup, coreMesh, faceLandmarker;
-        let panner, lowPass, masterGain;
         const video = document.getElementById('webcam');
+        const log = document.getElementById('log');
+        const playBtn = document.getElementById('playBtn');
 
-        // --- 物理パラメータ ---
-        const PREDICTION_MS = 60; // 予測ミリ秒（遅延分を先読み）
-        let lastPos = new THREE.Vector3();
-        let lastRot = 0;
-        let lastTime = performance.now();
+        function updateLog(msg) { log.innerText = msg; console.log(msg); }
 
         async function init() {
+            updateLog("INITIALIZING THREE.JS...");
             scene = new THREE.Scene();
             camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
             camera.position.set(0, 0, 15);
 
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.setPixelRatio(window.devicePixelRatio);
             document.getElementById('container').appendChild(renderer.domElement);
 
-            // 背景とグリッド
             scene.add(new THREE.GridHelper(100, 40, 0x00f2ff, 0x020210));
 
-            // リスナー（自分）
             headGroup = new THREE.Group();
             listener = new THREE.AudioListener();
             headGroup.add(listener);
             scene.add(headGroup);
 
-            // 音源オブジェクト
             coreMesh = new THREE.Mesh(
-                new THREE.SphereGeometry(1, 32, 32),
+                new THREE.IcosahedronGeometry(2, 1),
                 new THREE.MeshBasicMaterial({ color: 0x00f2ff, wireframe: true })
             );
             coreMesh.position.set(0, 0, -10);
             scene.add(coreMesh);
 
-            // --- オーディオグラフの構築 ---
-            const ctx = listener.context;
-            masterGain = ctx.createGain();
-            
-            // PositionalAudioの代わりに生のPannerNodeを制御して精度を上げる
             audio = new THREE.PositionalAudio(listener);
-            audio.setRolloffFactor(2);
-            // PanningModelをHRTFに設定（これがリアリティの鍵）
             audio.panner.panningModel = 'HRTF'; 
-            audio.panner.distanceModel = 'inverse';
-            
             coreMesh.add(audio);
 
             await setupTracking();
             animate();
-            
-            document.getElementById('playBtn').innerText = "START ENGINE";
         }
 
         async function setupTracking() {
-            const res = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm");
-            faceLandmarker = await FaceLandmarker.createFromOptions(res, {
-                baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task", delegate: "GPU" },
-                runningMode: "VIDEO", numFaces: 1
-            });
-            const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
-            video.srcObject = stream;
-            video.onloadeddata = () => predict();
+            updateLog("LOADING AI MODEL...");
+            try {
+                const res = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm");
+                faceLandmarker = await FaceLandmarker.createFromOptions(res, {
+                    baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task", delegate: "GPU" },
+                    runningMode: "VIDEO", numFaces: 1
+                });
+
+                updateLog("REQUESTING CAMERA...");
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+                video.srcObject = stream;
+                video.onloadedmetadata = () => {
+                    video.play();
+                    updateLog("READY: SELECT AUDIO FILE");
+                    predict();
+                };
+            } catch (e) {
+                updateLog("ERROR: " + e.message);
+            }
         }
 
         function predict() {
@@ -131,42 +118,13 @@
                 const results = faceLandmarker.detectForVideo(video, performance.now());
                 if (results.faceLandmarks?.[0]) {
                     const lm = results.faceLandmarks[0];
-                    const now = performance.now();
-                    const dt = (now - lastTime) / 1000;
-
-                    // 目と鼻の位置から座標を計算
-                    const centerX = (lm[234].x + lm[454].x) / 2;
-                    const centerY = (lm[234].y + lm[454].y) / 2;
-                    const faceWidth = Math.abs(lm[454].x - lm[234].x);
-
-                    // ターゲット座標 (反転修正済み)
-                    const targetX = (0.5 - centerX) * 40;
-                    const targetY = (0.5 - centerY) * 30;
-                    const targetZ = (0.15 / faceWidth) * 10;
-                    const targetYaw = (lm[1].x - centerX) * 10;
-
-                    // --- 速度予測アルゴリズム ---
-                    if (dt > 0) {
-                        const velX = (targetX - lastPos.x) / dt;
-                        const velYaw = (targetYaw - lastRot) / dt;
-
-                        // 未来の位置を予測（PREDICTION_MS分だけ先読み）
-                        const predictX = targetX + velX * (PREDICTION_MS / 1000);
-                        const predictYaw = targetYaw + velYaw * (PREDICTION_MS / 1000);
-
-                        // 補間（なめらかにしつつ追従性を維持）
-                        headGroup.position.x += (predictX - headGroup.position.x) * 0.3;
-                        headGroup.position.y += (targetY - headGroup.position.y) * 0.3;
-                        headGroup.position.z += (targetZ - headGroup.position.z) * 0.3;
-                        headGroup.rotation.y += (predictYaw - headGroup.rotation.y) * 0.4;
-
-                        document.getElementById('p-x').innerText = predictX.toFixed(2);
-                        document.getElementById('p-y').innerText = predictYaw.toFixed(2);
-                    }
-
-                    lastPos.set(targetX, targetY, targetZ);
-                    lastRot = targetYaw;
-                    lastTime = now;
+                    const targetX = (0.5 - ((lm[234].x + lm[454].x) / 2)) * 40;
+                    const targetYaw = (lm[1].x - ((lm[234].x + lm[454].x) / 2)) * 10;
+                    
+                    headGroup.position.x += (targetX - headGroup.position.x) * 0.2;
+                    headGroup.rotation.y += (targetYaw - headGroup.rotation.y) * 0.2;
+                    
+                    document.getElementById('track-info').innerText = `X: ${targetX.toFixed(2)} | YAW: ${targetYaw.toFixed(2)}`;
                 }
             }
             requestAnimationFrame(predict);
@@ -174,34 +132,45 @@
 
         function animate() {
             requestAnimationFrame(animate);
-            
-            // 音源のビジュアル演出
             if (audio.isPlaying) {
-                const time = performance.now() * 0.001;
-                coreMesh.position.x = Math.sin(time * 0.5) * 8;
-                coreMesh.rotation.z += 0.01;
+                coreMesh.rotation.y += 0.01;
+                coreMesh.scale.setScalar(1 + Math.sin(Date.now() * 0.005) * 0.2);
             }
-
             renderer.render(scene, camera);
         }
 
-        // --- UI Events ---
-        document.getElementById('fileInput').addEventListener('change', (e) => {
-            const reader = new FileReader();
-            reader.onload = (ev) => {
-                new THREE.AudioLoader().load(ev.target.result, (buf) => {
-                    audio.setBuffer(buf);
-                    audio.setLoop(true);
-                    document.getElementById('playBtn').disabled = false;
-                });
-            };
-            reader.readAsDataURL(e.target.files[0]);
+        // --- ファイル読み込みの修正 ---
+        document.getElementById('fileInput').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            updateLog("LOADING AUDIO...");
+            const arrayBuffer = await file.arrayBuffer();
+            
+            listener.context.decodeAudioData(arrayBuffer, (buffer) => {
+                audio.setBuffer(buffer);
+                audio.setLoop(true);
+                playBtn.disabled = false; // ここでボタンを有効化
+                updateLog("AUDIO LOADED. PRESS START.");
+            }, (err) => {
+                updateLog("DECODE ERROR: " + err);
+            });
         });
 
-        document.getElementById('playBtn').addEventListener('click', () => {
-            if (audio.context.state === 'suspended') audio.context.resume();
-            audio.isPlaying ? audio.pause() : audio.play();
-            document.getElementById('playBtn').innerText = audio.isPlaying ? "PAUSE" : "RESUME";
+        playBtn.addEventListener('click', () => {
+            if (listener.context.state === 'suspended') {
+                listener.context.resume();
+            }
+            
+            if (audio.isPlaying) {
+                audio.pause();
+                playBtn.innerText = "RESUME ENGINE";
+                updateLog("PAUSED");
+            } else {
+                audio.play();
+                playBtn.innerText = "PAUSE ENGINE";
+                updateLog("ENGINE RUNNING...");
+            }
         });
 
         window.addEventListener('resize', () => {
