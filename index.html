@@ -3,26 +3,27 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Organic Spatial View | Physics Based</title>
+    <title>Realistic Spatial View | 1:1 Scale</title>
     <style>
-        body { margin: 0; background: #000; overflow: hidden; font-family: 'Courier New', monospace; }
+        body { margin: 0; background: #000; overflow: hidden; font-family: 'Consolas', monospace; }
         #container { position: absolute; inset: 0; }
         #hud { 
             position: absolute; top: 20px; left: 20px; color: #00f2ff; 
-            background: rgba(0, 5, 20, 0.85); padding: 15px; border: 1px solid #00f2ff;
+            background: rgba(0, 5, 15, 0.9); padding: 15px; border-left: 3px solid #00f2ff;
             pointer-events: none; z-index: 100; font-size: 11px;
         }
         #webcam { display: none; }
-        .label { color: #888; margin-right: 10px; }
+        .label { color: #555; margin-right: 8px; }
+        .val { color: #fff; }
     </style>
 </head>
 <body>
 
     <div id="hud">
-        <div style="font-weight: bold; border-bottom: 1px solid #004455; padding-bottom: 5px; margin-bottom: 10px;">PHYSICS-BASED TRACKING</div>
-        <div><span class="label">LATENCY:</span><span id="stat-latency">--</span>ms</div>
-        <div><span class="label">JITTER:</span>ACTIVE</div>
-        <div style="margin-top: 10px; color: #ff00f2; font-size: 9px;">※物理慣性と生体ノイズを適用中</div>
+        <div style="font-weight: bold; margin-bottom: 8px; color: #ff00f2;">REAL-SCALE TRACKING</div>
+        <div><span class="label">POS-X:</span><span id="v-px" class="val">0.0</span></div>
+        <div><span class="label">YAW:</span><span id="v-ry" class="val">0.0</span></div>
+        <div style="margin-top: 8px; font-size: 9px; opacity: 0.7;">※移動量を現実の物理法則に同期中</div>
     </div>
     <div id="container"></div>
     <video id="webcam" autoplay playsinline></video>
@@ -42,44 +43,51 @@
         let scene, camera, renderer, faceLandmarker;
         const video = document.getElementById('webcam');
 
-        // --- 物理シミュレーション設定 ---
+        // --- 物理パラメータ（抑制版） ---
         const physics = {
-            pos: new THREE.Vector3(0, 0, 15),
+            pos: new THREE.Vector3(0, 0, 10),
             vel: new THREE.Vector3(0, 0, 0),
             rot: new THREE.Vector2(0, 0),
             rotVel: new THREE.Vector2(0, 0),
             
-            targetPos: new THREE.Vector3(0, 0, 15),
+            targetPos: new THREE.Vector3(0, 0, 10),
             targetRot: new THREE.Vector2(0, 0),
 
-            // パラメータ
-            stiffness: 0.2, // バネの強さ（高いと硬い）
-            damping: 0.7,   // 減衰（低いと重厚感が出る）
-            jitter: 0.0015  // 生体ノイズ
+            stiffness: 0.15, // 追従の強さ
+            damping: 0.8,    // 減衰（重厚感）
+            jitter: 0.0008   // ノイズ（より微細に）
         };
 
         async function init() {
             scene = new THREE.Scene();
-            scene.fog = new THREE.FogExp2(0x00050a, 0.03);
+            scene.fog = new THREE.FogExp2(0x00050a, 0.04);
 
-            camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 1000);
+            // FOVを45度に絞ることで周辺の歪みを防ぐ
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
             
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.setPixelRatio(window.devicePixelRatio);
             document.getElementById('container').appendChild(renderer.domElement);
 
-            // 空間の構築
-            const grid = new THREE.GridHelper(200, 40, 0x00f2ff, 0x001122);
-            grid.position.y = -8;
+            // 奥行きを強調するための構造
+            const grid = new THREE.GridHelper(100, 40, 0x00f2ff, 0x001122);
+            grid.position.y = -5;
             scene.add(grid);
 
-            // 浮遊する構造体
-            const geometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
-            for (let i = 0; i < 100; i++) {
-                const material = new THREE.MeshBasicMaterial({ color: 0x00f2ff, wireframe: true });
-                const cube = new THREE.Mesh(geometry, material);
-                cube.position.set((Math.random()-0.5)*60, (Math.random()-0.5)*40, (Math.random()-0.5)*60);
+            // 基準となる中心のオブジェクト
+            const centerCore = new THREE.Mesh(
+                new THREE.IcosahedronGeometry(1.5, 1),
+                new THREE.MeshBasicMaterial({ color: 0x00f2ff, wireframe: true })
+            );
+            scene.add(centerCore);
+
+            for (let i = 0; i < 40; i++) {
+                const cube = new THREE.Mesh(
+                    new THREE.BoxGeometry(0.3, 0.3, 0.3),
+                    new THREE.MeshBasicMaterial({ color: 0x00f2ff, wireframe: true, opacity: 0.5, transparent: true })
+                );
+                cube.position.set((Math.random()-0.5)*40, (Math.random()-0.5)*20, (Math.random()-0.5)*40 - 10);
                 scene.add(cube);
             }
 
@@ -97,64 +105,53 @@
 
                 const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
                 video.srcObject = stream;
-                video.onloadedmetadata = () => {
-                    video.play();
-                    predict();
-                };
-            } catch (e) {
-                console.error(e);
-            }
+                video.onloadedmetadata = () => { video.play(); predict(); };
+            } catch (e) { console.error(e); }
         }
 
         function predict() {
-            const startTime = performance.now();
             if (faceLandmarker && video.readyState >= 2) {
-                const results = faceLandmarker.detectForVideo(video, startTime);
+                const results = faceLandmarker.detectForVideo(video, performance.now());
                 if (results.faceLandmarks?.[0]) {
                     const lm = results.faceLandmarks[0];
                     const headX = (lm[234].x + lm[454].x) / 2;
                     const headY = (lm[234].y + lm[454].y) / 2;
                     const faceWidth = Math.abs(lm[454].x - lm[234].x);
 
-                    // ターゲット位置を更新
-                    physics.targetPos.x = (0.5 - headX) * 30;
-                    physics.targetPos.y = (0.5 - headY) * 20;
-                    physics.targetPos.z = (0.15 / faceWidth) * 12 + 5;
+                    // --- 係数を大幅に抑制 (リアルスケール) ---
+                    physics.targetPos.x = (0.5 - headX) * 8; 
+                    physics.targetPos.y = (0.5 - headY) * 5;
+                    physics.targetPos.z = (0.15 / faceWidth) * 4 + 7;
 
-                    // ターゲット回転（見回し）を更新
-                    physics.targetRot.y = (lm[1].x - headX) * 6;
-                    physics.targetRot.x = (headY - lm[1].y) * 5;
+                    // 回転の感度をさらに下げる
+                    physics.targetRot.y = (lm[1].x - headX) * 2.0;
+                    physics.targetRot.x = (headY - lm[1].y) * 1.5;
+
+                    document.getElementById('v-px').innerText = physics.targetPos.x.toFixed(2);
+                    document.getElementById('v-ry').innerText = physics.targetRot.y.toFixed(2);
                 }
             }
-            document.getElementById('stat-latency').innerText = (performance.now() - startTime).toFixed(1);
             requestAnimationFrame(predict);
         }
 
         function animate() {
             requestAnimationFrame(animate);
 
-            // --- 位置のバネ物理計算 ---
+            // 物理演算
             let forceP = new THREE.Vector3().subVectors(physics.targetPos, physics.pos).multiplyScalar(physics.stiffness);
             physics.vel.add(forceP).multiplyScalar(physics.damping);
             physics.pos.add(physics.vel);
 
-            // --- 回転のバネ物理計算 ---
             let forceR = new THREE.Vector2().subVectors(physics.targetRot, physics.rot).multiplyScalar(physics.stiffness);
             physics.rotVel.add(forceR).multiplyScalar(physics.damping);
             physics.rot.add(physics.rotVel);
 
-            // --- 生体ノイズ (Jitter) ---
-            const jitterX = (Math.random() - 0.5) * physics.jitter;
-            const jitterY = (Math.random() - 0.5) * physics.jitter;
+            // 微細ノイズ
+            const jX = (Math.random() - 0.5) * physics.jitter;
+            const jY = (Math.random() - 0.5) * physics.jitter;
 
-            // カメラに物理挙動を反映
             camera.position.copy(physics.pos);
-            camera.rotation.set(
-                physics.rot.x + jitterX,
-                physics.rot.y + jitterY,
-                0,
-                'XYZ'
-            );
+            camera.rotation.set(physics.rot.x + jX, physics.rot.y + jY, 0);
 
             renderer.render(scene, camera);
         }
