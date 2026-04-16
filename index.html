@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Definitive Spatial Engine | Ear-Line Centroid</title>
+    <title>Ultimate Spatial Engine | Fixed Audio & Tracking</title>
     <style>
         :root { --accent: #00f2ff; --bg: #05050a; --glass: rgba(10, 10, 25, 0.9); }
         body { margin: 0; background: var(--bg); color: var(--accent); font-family: 'Segoe UI', sans-serif; overflow: hidden; }
@@ -40,7 +40,7 @@
     <video id="webcam" autoplay playsinline></video>
 
     <div id="status-panel">
-        <div style="margin-bottom: 8px; font-weight: bold; color: #ff00f2;">EAR-LINE STABILIZED</div>
+        <div style="margin-bottom: 8px; font-weight: bold; color: #ff00f2;">FIXED AUDIO GRAPH</div>
         <div>TRACKING: <span id="track-stat" class="stat-val">INIT...</span></div>
         <div>X-POS: <span id="pos-x" class="stat-val">0.0</span></div>
         <div>YAW: <span id="rot-y" class="stat-val">0.0</span></div>
@@ -49,7 +49,7 @@
     <div id="overlay">
         <div style="text-align: center;">
             <h1 style="letter-spacing: 12px; margin: 0; font-weight: 200;">SPATIAL CORE</h1>
-            <p style="opacity: 0.5; font-size: 10px;">EAR-AXIS ROTATION FILTERING</p>
+            <p style="opacity: 0.5; font-size: 10px;">AUDIO SYNC & MIRROR FIX ENABLED</p>
         </div>
         <div class="ui-bottom">
             <label class="btn">Load Audio<input type="file" id="fileInput" accept="audio/*" style="display:none;"></label>
@@ -73,15 +73,11 @@
         import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3";
 
         let scene, camera, renderer, audio, listener, headGroup, coreMesh, faceLandmarker, orbit;
-        let filterNode, reverbNode, analyser;
+        let filterNode, reverbNode, masterGain, analyser;
         const video = document.getElementById('webcam');
 
-        // --- 安定化パラメータ ---
-        const LERP_POS = 0.03; // 位置追従（さらに重くして固定感を出す）
-        const LERP_ROT = 0.12; // 回転追従（キビキビ反応させる）
-        
-        // 234: 右耳付近, 454: 左耳付近 (これらの平均を「頭の回転軸」にする)
-        const earIndices = [234, 454]; 
+        const LERP_POS = 0.04; 
+        const LERP_ROT = 0.1; 
 
         async function init() {
             scene = new THREE.Scene();
@@ -116,24 +112,37 @@
             coreMesh.add(new THREE.PointLight(0x00f2ff, 60, 40));
             scene.add(new THREE.AmbientLight(0x111122));
 
-            // Audio Graph
+            // --- Fixed Audio Graph ---
+            const ctx = listener.context;
+            masterGain = ctx.createGain(); // 全ての音をまとめる出口
+            
             audio = new THREE.PositionalAudio(listener);
             audio.setRefDistance(5);
             coreMesh.add(audio);
 
-            const ctx = listener.context;
             filterNode = ctx.createBiquadFilter();
             reverbNode = ctx.createDelay();
+            const reverbGain = ctx.createGain(); // リバーブの音量調節
             const feedback = ctx.createGain();
-            reverbNode.delayTime.value = 0.1;
-            feedback.gain.value = 0.3;
-            reverbNode.connect(feedback); feedback.connect(reverbNode);
 
+            reverbNode.delayTime.value = 0.12;
+            feedback.gain.value = 0.3;
+            reverbGain.gain.value = 0.2; // ダブり感を抑え、広がりだけを残す
+
+            reverbNode.connect(feedback);
+            feedback.connect(reverbNode);
+
+            // 接続の見直し：audio -> filter -> masterGain
+            //                          -> reverb -> masterGain
             audio.panner.disconnect();
             audio.panner.connect(filterNode);
-            filterNode.connect(ctx.destination);
-            filterNode.connect(reverbNode);
-            reverbNode.connect(ctx.destination);
+            
+            filterNode.connect(masterGain); 
+            filterNode.connect(reverbNode); 
+            reverbNode.connect(reverbGain);
+            reverbGain.connect(masterGain);
+
+            masterGain.connect(ctx.destination); // 最終出力はここだけ
 
             analyser = new THREE.AudioAnalyser(audio, 128);
 
@@ -155,7 +164,7 @@
             });
             const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
             video.srcObject = stream;
-            video.onloadeddata = () => { document.getElementById('track-stat').innerText = "EAR-AXIS ON"; predict(); };
+            video.onloadeddata = () => { document.getElementById('track-stat').innerText = "STABLE-FIXED"; predict(); };
         }
 
         function predict() {
@@ -164,17 +173,13 @@
                 if (results.faceLandmarks?.[0]) {
                     const lm = results.faceLandmarks[0];
 
-                    // 1. 【最重要】位置基準を「耳のライン」に設定
-                    const earLX = lm[234].x, earLY = lm[234].y;
-                    const earRX = lm[454].x, earRY = lm[454].y;
-                    
-                    const headCenterX = (earLX + earRX) / 2;
-                    const headCenterY = (earLY + earRY) / 2;
-                    const faceWidth = Math.sqrt(Math.pow(earRX - earLX, 2) + Math.pow(earRY - earLY, 2));
+                    // 1. 耳ライン中心点 (234, 454)
+                    const headCenterX = (lm[234].x + lm[454].x) / 2;
+                    const headCenterY = (lm[234].y + lm[454].y) / 2;
+                    const faceWidth = Math.abs(lm[454].x - lm[234].x);
 
-                    // 2. 位置（平行移動）の計算
-                    // 耳の中心は首を振ってもほとんど動かないため、スライド誤認が消える
-                    const tX = (headCenterX - 0.5) * -30;
+                    // 2. 位置計算 (鏡合わせの挙動に反転)
+                    const tX = (headCenterX - 0.5) * 30; // 左右移動の反転
                     const tY = (0.5 - headCenterY) * 20 + 2;
                     const tZ = (0.2 / faceWidth) * 12;
 
@@ -182,15 +187,13 @@
                     headGroup.position.y += (tY - headGroup.position.y) * LERP_POS;
                     headGroup.position.z += (tZ - headGroup.position.z) * LERP_POS;
 
-                    // 3. 回転の計算
-                    // 鼻先（lm[1]）が、耳の中心軸からどれだけズレたかで角度を出す
-                    const yaw = (lm[1].x - headCenterX) * 8; // 感度を上げ、回転を強調
+                    // 3. 向き計算 (左右・上下の反転修正)
+                    const yaw = (lm[1].x - headCenterX) * 8; 
                     const pitch = (lm[1].y - headCenterY) * 7;
                     
-                    headGroup.rotation.y += (-yaw - headGroup.rotation.y) * LERP_ROT;
-                    headGroup.rotation.x += (pitch - headGroup.rotation.x) * LERP_ROT;
+                    headGroup.rotation.y += (yaw - headGroup.rotation.y) * LERP_ROT; // 左右振り反転
+                    headGroup.rotation.x += (-pitch - headGroup.rotation.x) * LERP_ROT; // 上下振り反転
 
-                    // ステータス表示
                     document.getElementById('pos-x').innerText = headGroup.position.x.toFixed(1);
                     document.getElementById('rot-y').innerText = yaw.toFixed(2);
                 }
