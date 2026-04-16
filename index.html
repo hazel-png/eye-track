@@ -2,62 +2,109 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>アイトラッキング - 修正版</title>
+    <title>iPhone風アイトラッキング校正</title>
     <style>
-        body { margin: 0; background: #f0f0f0; font-family: sans-serif; }
-        #status {
-            position: fixed; top: 10px; left: 10px; z-index: 9999;
-            background: rgba(0,0,0,0.8); color: white; padding: 15px; border-radius: 8px;
-        }
-        /* カメラプレビューとMediaPipeのデバッグ表示を徹底的に隠す */
-        canvas, video, .dg { display: none !important; }
-        #webgazerVideoContainer, #webgazerVideoFeed, #webgazerFaceOverlay, #webgazerFaceFeedbackBox {
-            display: none !important;
-        }
-        /* 視線の点だけは出す */
+        body { margin: 0; background: #000; overflow: hidden; font-family: sans-serif; }
+        
+        /* 視線の赤い点 */
         #webgazerGazeDot {
-            display: block !important;
-            background-color: red !important;
+            width: 12px !important; height: 12px !important;
+            background: #ff3b30 !important; border: none !important;
+            box-shadow: 0 0 15px #ff3b30; z-index: 10000 !important;
+        }
+
+        /* iPhone風のターゲットドット */
+        .target {
+            position: absolute; width: 40px; height: 40px;
+            background: rgba(255, 255, 255, 0.2);
+            border: 2px solid #fff; border-radius: 50%;
+            transform: translate(-50%, -50%); display: none;
+            transition: all 0.3s ease;
+        }
+        .target.active { background: #fff; transform: translate(-50%, -50%) scale(1.2); }
+
+        #instructions {
+            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: white; text-align: center; font-size: 1.2rem;
         }
     </style>
 </head>
 <body>
 
-<div id="status">セットアップ中...（カメラを許可してください）</div>
+<div id="instructions">カメラを許可してください</div>
+<div id="t1" class="target" style="top: 10%; left: 10%;"></div>
+<div id="t2" class="target" style="top: 10%; left: 90%;"></div>
+<div id="t3" class="target" style="top: 90%; left: 10%;"></div>
+<div id="t4" class="target" style="top: 90%; left: 90%;"></div>
+<div id="t5" class="target" style="top: 50%; left: 50%;"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/webgazer@2.1.0/dist/webgazer.js"></script>
 
 <script>
-    window.onload = async () => {
-        const status = document.getElementById('status');
+    let currentTarget = 1;
+    let stayCount = 0;
+    const requiredStay = 20; // 見つめ続ける時間（フレーム数）
 
-        try {
-            // WebGazerの開始
-            await webgazer.setRegression('ridge')
-                .setGazeListener((data, clock) => {
-                    if (data == null) return;
-                })
-                .begin();
+    async function startCalibration() {
+        document.getElementById('instructions').innerText = "表示されるドットを見つめてください";
+        showTarget(currentTarget);
 
-            // 設定の適用
-            webgazer.showVideoPreview(false)    // 顔を表示しない
-                    .showPredictionPoints(true) // 赤い点だけ出す
-                    .applyKalmanFilter(true);   // 動きを滑らかにする
+        await webgazer.setRegression('ridge')
+            .setGazeListener((data, clock) => {
+                if (data == null) return;
+                checkTarget(data.x, data.y);
+            })
+            .begin();
 
-            status.innerHTML = "トラッキング中！<br>画面の数カ所をクリックして校正してください。";
-            status.style.background = "green";
+        webgazer.showVideoPreview(false).showPredictionPoints(true);
+    }
 
-        } catch (e) {
-            status.innerHTML = "エラーが発生しました。サーバー(localhost)で実行しているか確認してください。";
-            status.style.background = "red";
-            console.error(e);
+    function showTarget(n) {
+        document.querySelectorAll('.target').forEach(t => t.style.display = 'none');
+        const target = document.getElementById('t' + n);
+        if (target) target.style.display = 'block';
+    }
+
+    function checkTarget(gx, gy) {
+        const target = document.getElementById('t' + currentTarget);
+        if (!target) return;
+
+        const rect = target.getBoundingClientRect();
+        const tx = rect.left + rect.width / 2;
+        const ty = rect.top + rect.height / 2;
+
+        // 視線がターゲットの近くにあるか判定
+        const dist = Math.hypot(gx - tx, gy - ty);
+        if (dist < 80) { // 判定距離
+            stayCount++;
+            target.classList.add('active');
+            
+            // 学習を強化
+            webgazer.recordScreenPosition(tx, ty);
+
+            if (stayCount > requiredStay) {
+                currentTarget++;
+                stayCount = 0;
+                target.classList.remove('active');
+                if (currentTarget <= 5) {
+                    showTarget(currentTarget);
+                } else {
+                    finishCalibration();
+                }
+            }
+        } else {
+            stayCount = 0;
+            target.classList.remove('active');
         }
-    };
+    }
 
-    window.onbeforeunload = () => {
-        webgazer.saveDataAcrossSessions(false); // データを保存しない
-        webgazer.end();
-    };
+    function finishCalibration() {
+        document.querySelectorAll('.target').forEach(t => t.style.display = 'none');
+        document.getElementById('instructions').innerHTML = "校正完了！<br>視線がスムーズに追従します";
+        setTimeout(() => { document.getElementById('instructions').style.display = 'none'; }, 3000);
+    }
+
+    window.onload = startCalibration;
 </script>
 
 </body>
