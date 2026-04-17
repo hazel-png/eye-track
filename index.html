@@ -2,141 +2,103 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>カメラ・ヘッドトラッキング 3Dオーディオ</title>
+    <title>カメラ・ヘッドトラッキング修正版</title>
     <style>
-        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; background-color: #f0f0f0; }
-        canvas { border: 2px solid #333; background-color: #000; max-width: 320px; max-height: 240px; }
-        #controls { margin-top: 20px; text-align: center; }
-        button { padding: 10px 20px; font-size: 16px; cursor: pointer; }
-        #status { margin-top: 10px; font-weight: bold; color: blue; }
-        #audioStatus { margin-top: 5px; color: #555; }
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; padding-top: 50px; background-color: #f0f0f0; }
+        canvas { border: 2px solid #333; background-color: #000; width: 320px; height: 240px; }
+        #controls { margin-top: 20px; }
+        button { padding: 15px 30px; font-size: 18px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 5px; }
+        button:disabled { background: #ccc; }
+        #status { margin-top: 15px; font-weight: bold; }
     </style>
+
+    <script src="https://cdn.jsdelivr.net/npm/jeelizfacefilter@latest/dist/jeelizFaceFilter.umd.js"></script>
 </head>
 <body>
 
-    <h1>カメラで作る立体音響</h1>
-    
-    <canvas width="640" height="480" id="jeeFaceFilterCanvas"></canvas>
+    <h1>ヘッドトラッキング・オーディオ</h1>
+    <canvas id="jeeFaceFilterCanvas"></canvas>
 
     <div id="controls">
-        <button id="startBtn">1. カメラと音声を起動</button>
-        <div id="status">待機中...</div>
-        <div id="audioStatus">音源: audio.mp3 (同じフォルダに必要)</div>
+        <button id="startBtn">カメラと音声を起動</button>
+        <div id="status">ライブラリ読み込み中...</div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/jeelizfacefilter@latest/dist/jeelizFaceFilter.umd.js"></script>
-
     <script>
-        // --- 設定と変数 ---
-        const MP3_FILE = 'audio.mp3'; // 用意するmp3ファイル名
-        const TRACKING_SENSITIVITY = 15; // 動きの感度 (大きいほど音の移動が極端になる)
-
-        let audioCtx, panner, source, htmlAudio;
-        let isAudioSetup = false;
-        let isLoaded = false;
-
-        const startBtn = document.getElementById('startBtn');
-        const statusDiv = document.getElementById('status');
-
-        // --- メイン処理 ---
-        startBtn.addEventListener('click', () => {
-            if (!isLoaded) {
-                initFaceFilter();
-                startBtn.disabled = true;
-                startBtn.textContent = "起動中...";
-            }
-        });
-
-        // Web Audio APIのセットアップ (3Dオーディオ)
-        function setupAudio() {
-            if (isAudioSetup) return;
-
-            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        window.onload = function() {
+            const startBtn = document.getElementById('startBtn');
+            const statusDiv = document.getElementById('status');
             
-            // HTMLのAudio要素を作成
-            htmlAudio = new Audio(MP3_FILE);
-            htmlAudio.loop = true; // ループ再生
+            // ライブラリが読み込まれているかチェック
+            if (typeof JEELIZFACEFILTER === 'undefined') {
+                statusDiv.textContent = "エラー: ライブラリを読み込めませんでした。ネット接続を確認してください。";
+                statusDiv.style.color = "red";
+                return;
+            }
 
-            // 音源を作成
-            source = audioCtx.createMediaElementSource(htmlAudio);
+            statusDiv.textContent = "準備完了！ボタンを押してください。";
 
-            // 3Dパンナー（立体音響ノード）を作成
-            panner = audioCtx.createPanner();
-            panner.panningModel = 'HRTF'; // 高品質な立体音響モデル
-            panner.distanceModel = 'inverse';
-            panner.refDistance = 1;
-            panner.maxDistance = 10000;
-            panner.rolloffFactor = 1;
-            panner.coneInnerAngle = 360;
-            panner.coneOuterAngle = 0;
-            panner.coneOuterGain = 0;
+            const MP3_FILE = 'audio.mp3';
+            let audioCtx, panner, htmlAudio, isAudioSetup = false;
 
-            // 初期位置を正面に設定 (X, Y, Z)
-            panner.positionX.setValueAtTime(0, audioCtx.currentTime);
-            panner.positionY.setValueAtTime(0, audioCtx.currentTime);
-            panner.positionZ.setValueAtTime(-1, audioCtx.currentTime); // 画面の奥
-
-            // 接続: 音源 -> パンナー -> 出力（スピーカー/イヤホン）
-            source.connect(panner);
-            panner.connect(audioCtx.destination);
-
-            // 再生開始
-            htmlAudio.play();
-            isAudioSetup = true;
-            statusDiv.textContent = "トラッキング中 & 再生中";
-            statusDiv.style.color = "green";
-        }
-
-        // jeelizFaceFilterの初期化 (カメラトラッキング)
-        function initFaceFilter() {
-            JEELIZFACEFILTER.init({
-                canvasId: 'jeeFaceFilterCanvas',
-                NNCPath: 'https://cdn.jsdelivr.net/npm/jeelizfacefilter@latest/dist/', // ニューラルネットワークモデルのパス
-                callbackReady: function(errCode, spec) {
-                    if (errCode) {
-                        console.error('AN ERROR HAPPENS. ERROR CODE =', errCode);
-                        statusDiv.textContent = "カメラエラー: " + errCode;
-                        statusDiv.style.color = "red";
-                        return;
-                    }
-                    console.log('JEELIZFACEFILTER IS READY');
-                    isLoaded = true;
-                    statusDiv.textContent = "カメラ準備完了。音声を解析します...";
-                    
-                    // カメラ準備完了後、ユーザーインタラクションを待ってオーディオを開始
-                    // (ブラウザの自動再生規制対策)
-                    if (confirm("カメラが起動しました。音声を再生して立体音響を開始しますか？")) {
-                        setupAudio();
-                    } else {
-                        statusDiv.textContent = "音声は再生されません。";
-                    }
-                },
-
-                // --- 毎フレーム実行されるコールバック (ここで顔の向きを取得) ---
-                callbackTrack: function(detectState) {
-                    // 顔が検知されている場合のみ処理
-                    if (detectState.detected > 0.6 && isAudioSetup) {
-                        // detectState.rx, ry, rz はラジアンでの回転角
-                        // rx: 上下, ry: 左右, rz: 首をかしげる
-                        
-                        const yaw = detectState.ry;   // 左右の向き
-                        const pitch = detectState.rx; // 上下の向き
-
-                        // --- 3D音響の位置を更新 ---
-                        // 顔が右を向いたら(yaw > 0)、音源を左に移動させる(positionX を負に)
-                        // これにより「音源が正面（画面）に固定されている」ように感じる
-                        const soundX = -yaw * TRACKING_SENSITIVITY;
-                        const soundY = -pitch * TRACKING_SENSITIVITY;
-
-                        // pannerの位置を更新 (Zは固定)
-                        panner.positionX.setValueAtTime(soundX, audioCtx.currentTime);
-                        panner.positionY.setValueAtTime(soundY, audioCtx.currentTime);
-                        // panner.positionZ.setValueAtTime(-1, audioCtx.currentTime);
-                    }
-                }
+            // ボタンクリック時の処理
+            startBtn.addEventListener('click', () => {
+                startBtn.disabled = true;
+                statusDiv.textContent = "カメラ起動中...";
+                initFaceFilter();
             });
-        }
+
+            function setupAudio() {
+                try {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    htmlAudio = new Audio(MP3_FILE);
+                    htmlAudio.loop = true;
+                    
+                    const source = audioCtx.createMediaElementSource(htmlAudio);
+                    panner = audioCtx.createPanner();
+                    panner.panningModel = 'HRTF';
+                    
+                    // 初期位置
+                    panner.positionX.setValueAtTime(0, audioCtx.currentTime);
+                    panner.positionZ.setValueAtTime(-1, audioCtx.currentTime);
+
+                    source.connect(panner);
+                    panner.connect(audioCtx.destination);
+
+                    htmlAudio.play().catch(e => {
+                        statusDiv.textContent = "音声再生エラー: audio.mp3が見つかりません。";
+                    });
+                    
+                    isAudioSetup = true;
+                    statusDiv.textContent = "トラッキング中...";
+                } catch(e) {
+                    statusDiv.textContent = "オーディオ設定エラー";
+                }
+            }
+
+            function initFaceFilter() {
+                JEELIZFACEFILTER.init({
+                    canvasId: 'jeeFaceFilterCanvas',
+                    NNCPath: 'https://cdn.jsdelivr.net/npm/jeelizfacefilter@latest/dist/',
+                    callbackReady: function(errCode) {
+                        if (errCode) {
+                            statusDiv.textContent = "カメラエラー: " + errCode;
+                            return;
+                        }
+                        setupAudio();
+                    },
+                    callbackTrack: function(detectState) {
+                        if (isAudioSetup && detectState.detected > 0.6) {
+                            // 顔の向きを音の位置に反映 (-20〜20の範囲で調整)
+                            const x = -detectState.ry * 20; 
+                            const y = -detectState.rx * 20;
+                            panner.positionX.setValueAtTime(x, audioCtx.currentTime);
+                            panner.positionY.setValueAtTime(y, audioCtx.currentTime);
+                        }
+                    }
+                });
+            }
+        };
     </script>
 </body>
 </html>
