@@ -2,103 +2,242 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>カメラ・ヘッドトラッキング修正版</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>The Physics of Sound - Head Tracking</title>
     <style>
-        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; padding-top: 50px; background-color: #f0f0f0; }
-        canvas { border: 2px solid #333; background-color: #000; width: 320px; height: 240px; }
-        #controls { margin-top: 20px; }
-        button { padding: 15px 30px; font-size: 18px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 5px; }
-        button:disabled { background: #ccc; }
-        #status { margin-top: 15px; font-weight: bold; }
-    </style>
+        :root { --gold: #d4af37; --bg: #000; --cyan: #00f2ff; }
+        body {
+            margin: 0; background: var(--bg); color: white;
+            font-family: 'Inter', sans-serif; display: flex; flex-direction: column;
+            align-items: center; min-height: 100vh; touch-action: none;
+        }
+        .ui-panel {
+            margin-top: 20px; background: #0a0a0a; border: 1px solid #222;
+            padding: 20px; border-radius: 20px; box-shadow: 0 0 40px rgba(0,0,0,1);
+            width: 320px;
+        }
+        .grid {
+            position: relative; width: 100%; height: 200px; background: #050505;
+            border: 1px solid #333; overflow: hidden; margin: 10px 0; border-radius: 10px;
+        }
+        .mesh {
+            position: absolute; width: 100%; height: 100%;
+            background-image: linear-gradient(rgba(212,175,55,0.05) 1px, transparent 1px),
+                              linear-gradient(90deg, rgba(212,175,55,0.05) 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+        .node {
+            position: absolute; width: 18px; height: 18px; background: var(--gold);
+            border-radius: 50%; transform: translate(-50%, -50%);
+            box-shadow: 0 0 20px var(--gold); z-index: 10; pointer-events: none;
+        }
+        .head {
+            position: absolute; top: 50%; left: 50%; width: 14px; height: 14px;
+            background: var(--cyan); border-radius: 50%; transform: translate(-50%, -50%);
+            box-shadow: 0 0 10px var(--cyan); transition: transform 0.1s;
+        }
+        /* 顔の向きを示すインジケーター */
+        .head::after {
+            content: ''; position: absolute; top: -10px; left: 6px; width: 2px; height: 10px; background: var(--cyan);
+        }
 
-    <script src="https://cdn.jsdelivr.net/npm/jeelizfacefilter@latest/dist/jeelizFaceFilter.umd.js"></script>
+        .status { font-family: monospace; font-size: 0.65rem; color: var(--gold); margin-bottom: 10px; text-align: center;}
+        .controls { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+        button, .upload-label {
+            font-size: 0.7rem; border: 1px solid #444; color: #ccc;
+            padding: 10px; border-radius: 5px; cursor: pointer; background: #111;
+            text-align: center; display: block;
+        }
+        .upload-label:hover { border-color: var(--gold); color: white; }
+        
+        /* カメラ用プレビュー */
+        #jeeFaceFilterCanvas {
+            width: 100%; height: auto; border-radius: 10px; border: 1px solid #333; transform: scaleX(-1);
+        }
+    </style>
 </head>
 <body>
 
-    <h1>ヘッドトラッキング・オーディオ</h1>
+<div class="ui-panel">
+    <div class="status" id="readout">SYSTEM: READY - ALLOW CAMERA</div>
+    
     <canvas id="jeeFaceFilterCanvas"></canvas>
 
-    <div id="controls">
-        <button id="startBtn">カメラと音声を起動</button>
-        <div id="status">ライブラリ読み込み中...</div>
+    <div class="grid" id="gridXZ">
+        <div class="mesh"></div>
+        <div id="headIcon" class="head"></div>
+        <div id="nodeXZ" class="node" style="top:50%; left:50%;"></div>
     </div>
 
-    <script>
-        window.onload = function() {
-            const startBtn = document.getElementById('startBtn');
-            const statusDiv = document.getElementById('status');
-            
-            // ライブラリが読み込まれているかチェック
-            if (typeof JEELIZFACEFILTER === 'undefined') {
-                statusDiv.textContent = "エラー: ライブラリを読み込めませんでした。ネット接続を確認してください。";
-                statusDiv.style.color = "red";
-                return;
+    <div class="controls">
+        <label class="upload-label" for="file">LOAD MASTER SOURCE</label>
+        <input type="file" id="file" hidden accept="audio/*">
+        <button id="cameraBtn">START TRACKING</button>
+        <button onclick="resetPos()">RESET POSITION</button>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/jeelizfacefilter@latest/dist/jeelizFaceFilter.umd.js"></script>
+
+<script>
+    let audioCtx, panner, source, mainFilter, rearFilter, reverbNode;
+    let coord = { x: 0, y: 0, z: -1 }; // 初期音源位置
+    let headRotation = { yaw: 0, pitch: 0 }; // 顔の向き
+    let isInitialized = false;
+
+    // --- 音響エンジンの初期化 ---
+    async function setupAudio(file) {
+        if (!audioCtx) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (source) source.stop();
+
+        panner = audioCtx.createPanner();
+        panner.panningModel = 'HRTF';
+        panner.distanceModel = 'inverse';
+
+        mainFilter = audioCtx.createBiquadFilter();
+        mainFilter.type = 'lowpass';
+
+        rearFilter = audioCtx.createBiquadFilter();
+        rearFilter.type = 'peaking';
+        rearFilter.frequency.value = 10000;
+        rearFilter.Q.value = 1;
+
+        reverbNode = audioCtx.createConvolver();
+        const duration = 1.5;
+        const rate = audioCtx.sampleRate;
+        const length = rate * duration;
+        const impulse = audioCtx.createBuffer(2, length, rate);
+        for (let i = 0; i < 2; i++) {
+            let channelData = impulse.getChannelData(i);
+            for (let j = 0; j < length; j++) {
+                channelData[j] = (Math.random() * 2 - 1) * Math.pow(1 - j / length, 2);
             }
+        }
+        reverbNode.buffer = impulse;
 
-            statusDiv.textContent = "準備完了！ボタンを押してください。";
+        const buffer = await file.arrayBuffer();
+        const audioData = await audioCtx.decodeAudioData(buffer);
+        
+        source = audioCtx.createBufferSource();
+        source.buffer = audioData;
+        source.loop = true;
 
-            const MP3_FILE = 'audio.mp3';
-            let audioCtx, panner, htmlAudio, isAudioSetup = false;
+        const reverbGain = audioCtx.createGain();
+        reverbGain.gain.value = 0.12;
 
-            // ボタンクリック時の処理
-            startBtn.addEventListener('click', () => {
-                startBtn.disabled = true;
-                statusDiv.textContent = "カメラ起動中...";
-                initFaceFilter();
-            });
+        source.connect(mainFilter);
+        mainFilter.connect(rearFilter);
+        rearFilter.connect(panner);
+        panner.connect(audioCtx.destination);
 
-            function setupAudio() {
-                try {
-                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                    htmlAudio = new Audio(MP3_FILE);
-                    htmlAudio.loop = true;
-                    
-                    const source = audioCtx.createMediaElementSource(htmlAudio);
-                    panner = audioCtx.createPanner();
-                    panner.panningModel = 'HRTF';
-                    
-                    // 初期位置
-                    panner.positionX.setValueAtTime(0, audioCtx.currentTime);
-                    panner.positionZ.setValueAtTime(-1, audioCtx.currentTime);
+        source.connect(reverbNode);
+        reverbNode.connect(reverbGain);
+        reverbGain.connect(audioCtx.destination);
 
-                    source.connect(panner);
-                    panner.connect(audioCtx.destination);
+        source.start();
+        isInitialized = true;
+        render();
+    }
 
-                    htmlAudio.play().catch(e => {
-                        statusDiv.textContent = "音声再生エラー: audio.mp3が見つかりません。";
-                    });
-                    
-                    isAudioSetup = true;
-                    statusDiv.textContent = "トラッキング中...";
-                } catch(e) {
-                    statusDiv.textContent = "オーディオ設定エラー";
+    // --- トラッキングの初期化 ---
+    function initTracker() {
+        JEELIZFACEFILTER.init({
+            canvasId: 'jeeFaceFilterCanvas',
+            NNCPath: 'https://cdn.jsdelivr.net/npm/jeelizfacefilter@latest/dist/',
+            callbackReady: function(errCode) {
+                if (errCode) {
+                    document.getElementById('readout').innerText = "CAMERA ERROR: " + errCode;
+                    return;
+                }
+                document.getElementById('readout').innerText = "TRACKING: ACTIVE";
+            },
+            callbackTrack: function(detectState) {
+                if (detectState.detected > 0.6) {
+                    // 顔の向きを取得 (ry=左右, rx=上下)
+                    headRotation.yaw = detectState.ry; 
+                    headRotation.pitch = detectState.rx;
                 }
             }
+        });
+    }
 
-            function initFaceFilter() {
-                JEELIZFACEFILTER.init({
-                    canvasId: 'jeeFaceFilterCanvas',
-                    NNCPath: 'https://cdn.jsdelivr.net/npm/jeelizfacefilter@latest/dist/',
-                    callbackReady: function(errCode) {
-                        if (errCode) {
-                            statusDiv.textContent = "カメラエラー: " + errCode;
-                            return;
-                        }
-                        setupAudio();
-                    },
-                    callbackTrack: function(detectState) {
-                        if (isAudioSetup && detectState.detected > 0.6) {
-                            // 顔の向きを音の位置に反映 (-20〜20の範囲で調整)
-                            const x = -detectState.ry * 20; 
-                            const y = -detectState.rx * 20;
-                            panner.positionX.setValueAtTime(x, audioCtx.currentTime);
-                            panner.positionY.setValueAtTime(y, audioCtx.currentTime);
-                        }
-                    }
-                });
-            }
+    // --- ループ処理 ---
+    function render() {
+        if (!isInitialized || !panner) return;
+        
+        const now = audioCtx.currentTime;
+        const scale = 15;
+        
+        const rx = coord.x * scale;
+        const ry = coord.y * scale;
+        const rz = coord.z * scale;
+
+        // 1. 音源の位置を更新
+        panner.positionX.setTargetAtTime(rx, now, 0.05);
+        panner.positionY.setTargetAtTime(ry, now, 0.05);
+        panner.positionZ.setTargetAtTime(rz, now, 0.05);
+
+        // 2. リスナー（自分）の向きを更新！
+        // 顔の向きに合わせて、Web Audio APIのListenerの向きベクトルを設定
+        if (audioCtx.listener.forwardX) {
+            // モダンなブラウザ用
+            const fx = Math.sin(headRotation.yaw);
+            const fz = -Math.cos(headRotation.yaw);
+            audioCtx.listener.forwardX.setTargetAtTime(fx, now, 0.05);
+            audioCtx.listener.forwardZ.setTargetAtTime(fz, now, 0.05);
+        } else {
+            // 旧式ブラウザ用
+            audioCtx.listener.setOrientation(Math.sin(headRotation.yaw), 0, -Math.cos(headRotation.yaw), 0, 1, 0);
+        }
+
+        // 物理フィルタ
+        const dist = Math.sqrt(rx*rx + ry*ry + rz*rz);
+        mainFilter.frequency.setTargetAtTime(Math.max(1500, 20000 - dist * 600), now, 0.1);
+
+        // UI更新
+        document.getElementById('nodeXZ').style.left = ((coord.x + 1) / 2 * 100) + '%';
+        document.getElementById('nodeXZ').style.top = ((coord.z + 1) / 2 * 100) + '%';
+        
+        // アイコンを顔の向きに合わせて回転させる
+        document.getElementById('headIcon').style.transform = `translate(-50%, -50%) rotate(${headRotation.yaw * 57.3}deg)`;
+        
+        document.getElementById('readout').innerText = `HEAD: ${(headRotation.yaw * 57.3).toFixed(0)}° | POS X:${rx.toFixed(1)} Z:${rz.toFixed(1)}`;
+        
+        requestAnimationFrame(render);
+    }
+
+    // --- ハンドラー ---
+    document.getElementById('cameraBtn').onclick = () => {
+        if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+        initTracker();
+    };
+
+    document.getElementById('file').onchange = (e) => {
+        if (e.target.files[0]) setupAudio(e.target.files[0]);
+    };
+
+    function handleInput(gridId) {
+        const grid = document.getElementById(gridId);
+        let active = false;
+        const update = (e) => {
+            if (!active) return;
+            const r = grid.getBoundingClientRect();
+            const t = e.touches ? e.touches[0] : e;
+            coord.x = (t.clientX - r.left) / r.width * 2 - 1;
+            coord.z = (t.clientY - r.top) / r.height * 2 - 1;
         };
-    </script>
+        grid.addEventListener('mousedown', (e) => { active = true; update(e); });
+        window.addEventListener('mousemove', update);
+        window.addEventListener('mouseup', () => active = false);
+        grid.addEventListener('touchstart', (e) => { active = true; update(e); }, {passive: false});
+        window.addEventListener('touchmove', (e) => { if(active) update(e); }, {passive: false});
+        window.addEventListener('touchend', () => active = false);
+    }
+    handleInput('gridXZ');
+
+    function resetPos() { coord = { x: 0, y: 0, z: -1 }; headRotation = { yaw: 0, pitch: 0 }; }
+</script>
 </body>
 </html>
