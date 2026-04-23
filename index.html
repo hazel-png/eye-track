@@ -2,72 +2,56 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Gaze & Convergence Focus Sync</title>
+  <title>Gaze & Convergence Focus Sync Pro</title>
   <style>
-    body { margin: 0; overflow: hidden; background: #000; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-    #three-canvas { display: block; width: 100vw; height: 100vh; }
+    body { margin: 0; overflow: hidden; background: #000; font-family: 'Segoe UI', system-ui, sans-serif; }
+    canvas#three-canvas { display: block; width: 100vw; height: 100vh; }
     
     #gaze-cursor {
-      position: absolute;
-      width: 30px;
-      height: 30px;
-      border: 2px solid rgba(0, 255, 255, 0.6);
-      border-radius: 50%;
-      pointer-events: none;
+      position: absolute; width: 35px; height: 35px;
+      border: 2px solid rgba(0, 255, 255, 0.8);
+      border-radius: 50%; pointer-events: none;
       transform: translate(-50%, -50%);
-      transition: transform 0.1s ease-out;
+      transition: transform 0.05s linear;
       z-index: 100;
-      box-shadow: 0 0 15px rgba(0, 255, 255, 0.4);
+      box-shadow: 0 0 20px rgba(0, 255, 255, 0.5);
     }
 
     #info-panel {
-      position: absolute;
-      top: 20px;
-      left: 20px;
-      color: #00ffff;
-      background: rgba(0, 0, 0, 0.7);
-      padding: 15px;
-      border-radius: 8px;
-      font-size: 12px;
-      line-height: 1.6;
-      pointer-events: none;
-      border: 1px solid #00ffff33;
+      position: absolute; top: 20px; left: 20px;
+      color: #00ffff; background: rgba(0, 0, 0, 0.8);
+      padding: 15px; border-radius: 8px; font-size: 11px;
+      font-family: 'Courier New', monospace;
+      pointer-events: none; border: 1px solid #00ffff44;
       z-index: 101;
     }
 
     #loading-overlay {
-      position: absolute;
-      inset: 0;
-      background: #000;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      color: white;
-      z-index: 1000;
-      transition: opacity 1s ease;
+      position: absolute; inset: 0; background: #050505;
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; color: #00ffff; z-index: 1000;
+      transition: opacity 0.8s ease;
     }
 
-    /* Hidden webcam feed */
-    #webcam-raw { display: none; }
+    #webcam-hidden { display: none; }
   </style>
 </head>
 <body>
 
 <div id="loading-overlay">
-  <h2 id="loading-status">INITIALIZING CAMERA...</h2>
-  <p>Please allow camera access if prompted</p>
+  <h2 id="loading-status">SYNCING BIOMETRICS...</h2>
+  <p>Initializing MediaPipe Face Landmarker</p>
 </div>
 
 <div id="info-panel">
-  <div style="font-weight: bold; margin-bottom: 5px;">SYSTEM STATUS</div>
-  <div>Gaze Position: <span id="val-gaze">Calculating...</span></div>
-  <div>Convergence: <span id="val-conv">0%</span></div>
-  <div>Focus Depth: <span id="val-depth">--</span></div>
+  <div style="font-weight: bold; margin-bottom: 8px; border-bottom: 1px solid #00ffff44;">OPTICAL TELEMETRY</div>
+  <div>GAZE_XY: <span id="val-gaze">--</span></div>
+  <div>CONVERGENCE: <span id="val-conv">0%</span></div>
+  <div>FOCUS_DIST: <span id="val-depth">0.00</span></div>
 </div>
 
 <div id="gaze-cursor"></div>
-<video id="webcam-raw" autoplay playsinline></video>
+<video id="webcam-hidden" autoplay playsinline></video>
 <canvas id="three-canvas"></canvas>
 
 <script type="importmap">
@@ -85,214 +69,163 @@
   import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
   import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
   import { BokehPass } from 'three/addons/postprocessing/BokehPass.js';
-  import { FaceLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
+  import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.9";
 
-  // --- GLOBAL CONFIGURATION ---
-  const APP_CONFIG = {
-    irisDistMax: 0.056,  // Threshold for distant focus (Normal)
-    irisDistMin: 0.044,  // Threshold for near focus (Cross-eye)
-    lerpFactor: 0.15,    // Smoothing speed for focus transitions
-    cameraDepth: 20,     // Three.js Camera Z position
-    objectCount: 40      // Number of floating spheres
+  const CONFIG = {
+    irisMax: 0.056,  // Far distance threshold
+    irisMin: 0.044,  // Near distance threshold
+    smooth: 0.12,    // Interpolation speed
+    camZ: 25
   };
 
   let scene, camera, renderer, composer, bokehPass;
-  let faceLandmarker;
-  let video;
+  let faceLandmarker, video;
   let lastVideoTime = -1;
   let gazePoint = { x: 0.5, y: 0.5 };
-  let currentFocusZ = 0;
 
   const uiGaze = document.getElementById('val-gaze');
   const uiConv = document.getElementById('val-conv');
   const uiDepth = document.getElementById('val-depth');
   const overlay = document.getElementById('loading-overlay');
+  const cursor = document.getElementById('gaze-cursor');
 
-  /**
-   * Initialize Three.js Scene
-   */
-  function initThree() {
-    const canvas = document.getElementById('three-canvas');
-    renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  async function init() {
+    // 1. Three.js Setup
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x020205);
+    scene.fog = new THREE.FogExp2(0x020205, 0.02);
+
+    camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 1000);
+    camera.position.z = CONFIG.camZ;
+
+    renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('three-canvas'), antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(window.devicePixelRatio);
 
-    scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x020406);
-
-    camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
-    camera.position.z = APP_CONFIG.cameraDepth;
-
-    // Lighting
-    scene.add(new THREE.AmbientLight(0xffffff, 0.3));
-    const spotLight = new THREE.SpotLight(0x00ffff, 1000);
-    spotLight.position.set(10, 20, 20);
-    scene.add(spotLight);
-
-    // Populate objects
-    const geo = new THREE.IcosahedronGeometry(1.2, 3);
-    for (let i = 0; i < APP_CONFIG.objectCount; i++) {
+    // Geometry Generation
+    const geo = new THREE.IcosahedronGeometry(1.5, 2);
+    for(let i=0; i<60; i++) {
       const mat = new THREE.MeshStandardMaterial({ 
-        color: new THREE.Color().setHSL(Math.random(), 0.7, 0.5),
-        metalness: 0.5,
-        roughness: 0.2
+        color: new THREE.Color().setHSL(Math.random(), 0.8, 0.6),
+        emissive: new THREE.Color().setHSL(Math.random(), 0.8, 0.2),
+        metalness: 0.8, roughness: 0.1
       });
       const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.set(
-        (Math.random() - 0.5) * 40,
-        (Math.random() - 0.5) * 25,
-        (Math.random() - 0.5) * 30
-      );
-      mesh.userData.orbitSpeed = Math.random() * 0.01;
+      mesh.position.set((Math.random()-0.5)*50, (Math.random()-0.5)*30, (Math.random()-0.5)*40);
       scene.add(mesh);
     }
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+    const light = new THREE.PointLight(0x00ffff, 1000, 100);
+    light.position.set(10, 10, 20);
+    scene.add(light);
 
     // Post Processing
     composer = new EffectComposer(renderer);
     composer.addPass(new RenderPass(scene, camera));
-
-    bokehPass = new BokehPass(scene, camera, {
-      focus: 10.0,
-      aperture: 0.015,
-      maxblur: 0.012
-    });
+    bokehPass = new BokehPass(scene, camera, { focus: 15, aperture: 0.018, maxblur: 0.015 });
     composer.addPass(bokehPass);
 
-    window.addEventListener('resize', onWindowResize);
+    // 2. MediaPipe Initializer
+    try {
+      const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.9/wasm");
+      faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+          delegate: "GPU"
+        },
+        runningMode: "VIDEO",
+        outputFaceBlendshapes: true
+      });
+
+      video = document.getElementById('webcam-hidden');
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+      video.srcObject = stream;
+      video.onloadedmetadata = () => {
+        video.play();
+        overlay.style.opacity = '0';
+        setTimeout(() => overlay.style.display = 'none', 800);
+        animate();
+      };
+    } catch (err) {
+      document.getElementById('loading-status').innerText = "HARDWARE ERROR";
+      console.error(err);
+    }
   }
 
-  function onWindowResize() {
+  function processFrame(landmarks) {
+    const pL = landmarks[468]; // Left Iris
+    const pR = landmarks[473]; // Right Iris
+    if (!pL || !pR) return;
+
+    // Gaze Point Smoothing
+    gazePoint.x += ((pL.x + pR.x)/2 - gazePoint.x) * 0.25;
+    gazePoint.y += ((pL.y + pR.y)/2 - gazePoint.y) * 0.25;
+
+    // Move UI Cursor
+    const screenX = (1 - gazePoint.x) * window.innerWidth;
+    const screenY = gazePoint.y * window.innerHeight;
+    cursor.style.left = `${screenX}px`;
+    cursor.style.top = `${screenY}px`;
+
+    // Convergence Calc
+    const irisDist = Math.sqrt(Math.pow(pR.x - pL.x, 2) + Math.pow(pR.y - pL.y, 2));
+    let conv = (CONFIG.irisMax - irisDist) / (CONFIG.irisMax - CONFIG.irisMin);
+    conv = Math.max(0, Math.min(1, conv));
+
+    // Raycast to find depth
+    const raycaster = new THREE.Raycaster();
+    const ndcX = ((1 - gazePoint.x) * 2) - 1;
+    const ndcY = -(gazePoint.y * 2) + 1;
+    raycaster.setFromCamera({ x: ndcX, y: ndcY }, camera);
+    
+    const hits = raycaster.intersectObjects(scene.children);
+    let targetFocus = 20; // Default
+
+    if (hits.length > 0) {
+      const baseDepth = hits[0].distance;
+      // Adjust focus based on convergence offset
+      targetFocus = baseDepth - (conv * 12);
+    }
+
+    bokehPass.uniforms.focus.value += (targetFocus - bokehPass.uniforms.focus.value) * CONFIG.smooth;
+
+    // UI Feedback
+    uiGaze.innerText = `${(1-gazePoint.x).toFixed(2)} | ${gazePoint.y.toFixed(2)}`;
+    uiConv.innerText = `${(conv * 100).toFixed(0)}%`;
+    uiDepth.innerText = bokehPass.uniforms.focus.value.toFixed(2);
+  }
+
+  function animate() {
+    requestAnimationFrame(animate);
+
+    // Scene animation
+    scene.children.forEach((obj, i) => {
+      if (obj.isMesh) {
+        obj.rotation.x += 0.005;
+        obj.rotation.y += 0.008;
+        obj.position.y += Math.sin(Date.now() * 0.001 + i) * 0.02;
+      }
+    });
+
+    if (video.currentTime !== lastVideoTime) {
+      lastVideoTime = video.currentTime;
+      const res = faceLandmarker.detectForVideo(video, performance.now());
+      if (res.faceLandmarks && res.faceLandmarks[0]) {
+        processFrame(res.faceLandmarks[0]);
+      }
+    }
+    composer.render();
+  }
+
+  window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
     composer.setSize(window.innerWidth, window.innerHeight);
-  }
-
-  /**
-   * Initialize MediaPipe Face Landmarker
-   */
-  async function initTracking() {
-    const vision = await FilesetResolver.forVisionTasks(
-      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.9/wasm"
-    );
-    
-    faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
-      baseOptions: {
-        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-        delegate: "GPU"
-      },
-      runningMode: "VIDEO",
-      outputFaceBlendshapes: true
-    });
-
-    video = document.getElementById('webcam-raw');
-    const stream = await navigator.mediaDevices.getUserMedia({ 
-      video: { width: 640, height: 480, frameRate: 30 } 
-    });
-    video.srcObject = stream;
-
-    return new Promise(resolve => {
-      video.onloadedmetadata = () => {
-        video.play();
-        overlay.style.opacity = '0';
-        setTimeout(() => overlay.style.display = 'none', 1000);
-        resolve();
-      };
-    });
-  }
-
-  /**
-   * Process Face Landmarks for Gaze and Convergence
-   */
-  function processTracking(landmarks) {
-    const irisL = landmarks[468];
-    const irisR = landmarks[473];
-
-    if (!irisL || !irisR) return;
-
-    // 1. Gaze Tracking Logic
-    // Average position of both irises
-    const rawGazeX = (irisL.x + irisR.x) / 2;
-    const rawGazeY = (irisL.y + irisR.y) / 2;
-
-    // Smoothing gaze point
-    gazePoint.x += (rawGazeX - gazePoint.x) * 0.2;
-    gazePoint.y += (rawGazeY - gazePoint.y) * 0.2;
-
-    // Update UI Cursor (Mirrored horizontally for natural feel)
-    const cursorX = (1 - gazePoint.x) * window.innerWidth;
-    const cursorY = gazePoint.y * window.innerHeight;
-    const cursor = document.getElementById('gaze-cursor');
-    cursor.style.left = `${cursorX}px`;
-    cursor.style.top = `${cursorY}px`;
-
-    // 2. Convergence (Cross-eye) Calculation
-    const dist = Math.sqrt(
-      Math.pow(irisR.x - irisL.x, 2) + Math.pow(irisR.y - irisL.y, 2)
-    );
-    
-    let convFactor = (APP_CONFIG.irisDistMax - dist) / (APP_CONFIG.irisDistMax - APP_CONFIG.irisDistMin);
-    convFactor = Math.max(0, Math.min(1, convFactor));
-
-    // 3. Raycasting to find target focus depth
-    const raycaster = new THREE.Raycaster();
-    // Convert normalized gaze coordinates to NDC (-1 to +1)
-    const ndcX = ((1 - gazePoint.x) * 2) - 1;
-    const ndcY = -(gazePoint.y * 2) + 1;
-
-    raycaster.setFromCamera({ x: ndcX, y: ndcY }, camera);
-    const intersects = raycaster.intersectObjects(scene.children);
-
-    let targetZ = 0; // Default background Z
-    if (intersects.length > 0) {
-      // Base depth from looked-at object
-      const objDist = intersects[0].distance;
-      // Adjust focus depth based on convergence (offsetting depth)
-      const depthAdjustment = convFactor * 10; 
-      targetZ = objDist - depthAdjustment;
-    }
-
-    // Smoothly interpolate focus
-    bokehPass.uniforms.focus.value += (targetZ - bokehPass.uniforms.focus.value) * APP_CONFIG.lerpSpeed;
-
-    // Update Telemetry UI
-    uiGaze.innerText = `${(1-gazePoint.x).toFixed(2)}, ${gazePoint.y.toFixed(2)}`;
-    uiConv.innerText = `${(convFactor * 100).toFixed(0)}%`;
-    uiDepth.innerText = bokehPass.uniforms.focus.value.toFixed(2);
-  }
-
-  /**
-   * Main Animation Loop
-   */
-  function animate() {
-    requestAnimationFrame(animate);
-
-    // Object orbital movement
-    scene.children.forEach(obj => {
-      if (obj instanceof THREE.Mesh) {
-        obj.rotation.y += 0.01;
-        obj.position.y += Math.sin(Date.now() * 0.001 + obj.position.x) * 0.01;
-      }
-    });
-
-    if (faceLandmarker && video.currentTime !== lastVideoTime) {
-      lastVideoTime = video.currentTime;
-      const results = faceLandmarker.detectForVideo(video, performance.now());
-      if (results.faceLandmarks && results.faceLandmarks[0]) {
-        processTracking(results.faceLandmarks[0]);
-      }
-    }
-
-    composer.render();
-  }
-
-  // ENTRY POINT
-  initThree();
-  initTracking().then(animate).catch(err => {
-    document.getElementById('loading-status').innerText = "CAMERA ACCESS DENIED";
-    console.error(err);
   });
 
+  init();
 </script>
 </body>
 </html>
