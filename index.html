@@ -1,243 +1,298 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>The Physics of Sound - Head Tracking</title>
-    <style>
-        :root { --gold: #d4af37; --bg: #000; --cyan: #00f2ff; }
-        body {
-            margin: 0; background: var(--bg); color: white;
-            font-family: 'Inter', sans-serif; display: flex; flex-direction: column;
-            align-items: center; min-height: 100vh; touch-action: none;
-        }
-        .ui-panel {
-            margin-top: 20px; background: #0a0a0a; border: 1px solid #222;
-            padding: 20px; border-radius: 20px; box-shadow: 0 0 40px rgba(0,0,0,1);
-            width: 320px;
-        }
-        .grid {
-            position: relative; width: 100%; height: 200px; background: #050505;
-            border: 1px solid #333; overflow: hidden; margin: 10px 0; border-radius: 10px;
-        }
-        .mesh {
-            position: absolute; width: 100%; height: 100%;
-            background-image: linear-gradient(rgba(212,175,55,0.05) 1px, transparent 1px),
-                              linear-gradient(90deg, rgba(212,175,55,0.05) 1px, transparent 1px);
-            background-size: 20px 20px;
-        }
-        .node {
-            position: absolute; width: 18px; height: 18px; background: var(--gold);
-            border-radius: 50%; transform: translate(-50%, -50%);
-            box-shadow: 0 0 20px var(--gold); z-index: 10; pointer-events: none;
-        }
-        .head {
-            position: absolute; top: 50%; left: 50%; width: 14px; height: 14px;
-            background: var(--cyan); border-radius: 50%; transform: translate(-50%, -50%);
-            box-shadow: 0 0 10px var(--cyan); transition: transform 0.1s;
-        }
-        /* 顔の向きを示すインジケーター */
-        .head::after {
-            content: ''; position: absolute; top: -10px; left: 6px; width: 2px; height: 10px; background: var(--cyan);
-        }
+  <meta charset="utf-8">
+  <title>Gaze & Convergence Focus Sync</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #000; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+    #three-canvas { display: block; width: 100vw; height: 100vh; }
+    
+    #gaze-cursor {
+      position: absolute;
+      width: 30px;
+      height: 30px;
+      border: 2px solid rgba(0, 255, 255, 0.6);
+      border-radius: 50%;
+      pointer-events: none;
+      transform: translate(-50%, -50%);
+      transition: transform 0.1s ease-out;
+      z-index: 100;
+      box-shadow: 0 0 15px rgba(0, 255, 255, 0.4);
+    }
 
-        .status { font-family: monospace; font-size: 0.65rem; color: var(--gold); margin-bottom: 10px; text-align: center;}
-        .controls { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
-        button, .upload-label {
-            font-size: 0.7rem; border: 1px solid #444; color: #ccc;
-            padding: 10px; border-radius: 5px; cursor: pointer; background: #111;
-            text-align: center; display: block;
-        }
-        .upload-label:hover { border-color: var(--gold); color: white; }
-        
-        /* カメラ用プレビュー */
-        #jeeFaceFilterCanvas {
-            width: 100%; height: auto; border-radius: 10px; border: 1px solid #333; transform: scaleX(-1);
-        }
-    </style>
+    #info-panel {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      color: #00ffff;
+      background: rgba(0, 0, 0, 0.7);
+      padding: 15px;
+      border-radius: 8px;
+      font-size: 12px;
+      line-height: 1.6;
+      pointer-events: none;
+      border: 1px solid #00ffff33;
+      z-index: 101;
+    }
+
+    #loading-overlay {
+      position: absolute;
+      inset: 0;
+      background: #000;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      z-index: 1000;
+      transition: opacity 1s ease;
+    }
+
+    /* Hidden webcam feed */
+    #webcam-raw { display: none; }
+  </style>
 </head>
 <body>
 
-<div class="ui-panel">
-    <div class="status" id="readout">SYSTEM: READY - ALLOW CAMERA</div>
-    
-    <canvas id="jeeFaceFilterCanvas"></canvas>
-
-    <div class="grid" id="gridXZ">
-        <div class="mesh"></div>
-        <div id="headIcon" class="head"></div>
-        <div id="nodeXZ" class="node" style="top:50%; left:50%;"></div>
-    </div>
-
-    <div class="controls">
-        <label class="upload-label" for="file">LOAD MASTER SOURCE</label>
-        <input type="file" id="file" hidden accept="audio/*">
-        <button id="cameraBtn">START TRACKING</button>
-        <button onclick="resetPos()">RESET POSITION</button>
-    </div>
+<div id="loading-overlay">
+  <h2 id="loading-status">INITIALIZING CAMERA...</h2>
+  <p>Please allow camera access if prompted</p>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/jeelizfacefilter@latest/dist/jeelizFaceFilter.umd.js"></script>
+<div id="info-panel">
+  <div style="font-weight: bold; margin-bottom: 5px;">SYSTEM STATUS</div>
+  <div>Gaze Position: <span id="val-gaze">Calculating...</span></div>
+  <div>Convergence: <span id="val-conv">0%</span></div>
+  <div>Focus Depth: <span id="val-depth">--</span></div>
+</div>
 
-<script>
-    let audioCtx, panner, source, mainFilter, rearFilter, reverbNode;
-    let coord = { x: 0, y: 0, z: -1 }; // 初期音源位置
-    let headRotation = { yaw: 0, pitch: 0 }; // 顔の向き
-    let isInitialized = false;
+<div id="gaze-cursor"></div>
+<video id="webcam-raw" autoplay playsinline></video>
+<canvas id="three-canvas"></canvas>
 
-    // --- 音響エンジンの初期化 ---
-    async function setupAudio(file) {
-        if (!audioCtx) {
-            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        }
-        if (source) source.stop();
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.161.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.161.0/examples/jsm/",
+    "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.9/vision_bundle.js"
+  }
+}
+</script>
 
-        panner = audioCtx.createPanner();
-        panner.panningModel = 'HRTF';
-        panner.distanceModel = 'inverse';
+<script type="module">
+  import * as THREE from 'three';
+  import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+  import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+  import { BokehPass } from 'three/addons/postprocessing/BokehPass.js';
+  import { FaceLandmarker, FilesetResolver } from "@mediapipe/tasks-vision";
 
-        mainFilter = audioCtx.createBiquadFilter();
-        mainFilter.type = 'lowpass';
+  // --- GLOBAL CONFIGURATION ---
+  const APP_CONFIG = {
+    irisDistMax: 0.056,  // Threshold for distant focus (Normal)
+    irisDistMin: 0.044,  // Threshold for near focus (Cross-eye)
+    lerpFactor: 0.15,    // Smoothing speed for focus transitions
+    cameraDepth: 20,     // Three.js Camera Z position
+    objectCount: 40      // Number of floating spheres
+  };
 
-        rearFilter = audioCtx.createBiquadFilter();
-        rearFilter.type = 'peaking';
-        rearFilter.frequency.value = 10000;
-        rearFilter.Q.value = 1;
+  let scene, camera, renderer, composer, bokehPass;
+  let faceLandmarker;
+  let video;
+  let lastVideoTime = -1;
+  let gazePoint = { x: 0.5, y: 0.5 };
+  let currentFocusZ = 0;
 
-        reverbNode = audioCtx.createConvolver();
-        const duration = 1.5;
-        const rate = audioCtx.sampleRate;
-        const length = rate * duration;
-        const impulse = audioCtx.createBuffer(2, length, rate);
-        for (let i = 0; i < 2; i++) {
-            let channelData = impulse.getChannelData(i);
-            for (let j = 0; j < length; j++) {
-                channelData[j] = (Math.random() * 2 - 1) * Math.pow(1 - j / length, 2);
-            }
-        }
-        reverbNode.buffer = impulse;
+  const uiGaze = document.getElementById('val-gaze');
+  const uiConv = document.getElementById('val-conv');
+  const uiDepth = document.getElementById('val-depth');
+  const overlay = document.getElementById('loading-overlay');
 
-        const buffer = await file.arrayBuffer();
-        const audioData = await audioCtx.decodeAudioData(buffer);
-        
-        source = audioCtx.createBufferSource();
-        source.buffer = audioData;
-        source.loop = true;
+  /**
+   * Initialize Three.js Scene
+   */
+  function initThree() {
+    const canvas = document.getElementById('three-canvas');
+    renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
 
-        const reverbGain = audioCtx.createGain();
-        reverbGain.gain.value = 0.12;
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x020406);
 
-        source.connect(mainFilter);
-        mainFilter.connect(rearFilter);
-        rearFilter.connect(panner);
-        panner.connect(audioCtx.destination);
+    camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.z = APP_CONFIG.cameraDepth;
 
-        source.connect(reverbNode);
-        reverbNode.connect(reverbGain);
-        reverbGain.connect(audioCtx.destination);
+    // Lighting
+    scene.add(new THREE.AmbientLight(0xffffff, 0.3));
+    const spotLight = new THREE.SpotLight(0x00ffff, 1000);
+    spotLight.position.set(10, 20, 20);
+    scene.add(spotLight);
 
-        source.start();
-        isInitialized = true;
-        render();
+    // Populate objects
+    const geo = new THREE.IcosahedronGeometry(1.2, 3);
+    for (let i = 0; i < APP_CONFIG.objectCount; i++) {
+      const mat = new THREE.MeshStandardMaterial({ 
+        color: new THREE.Color().setHSL(Math.random(), 0.7, 0.5),
+        metalness: 0.5,
+        roughness: 0.2
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(
+        (Math.random() - 0.5) * 40,
+        (Math.random() - 0.5) * 25,
+        (Math.random() - 0.5) * 30
+      );
+      mesh.userData.orbitSpeed = Math.random() * 0.01;
+      scene.add(mesh);
     }
 
-    // --- トラッキングの初期化 ---
-    function initTracker() {
-        JEELIZFACEFILTER.init({
-            canvasId: 'jeeFaceFilterCanvas',
-            NNCPath: 'https://cdn.jsdelivr.net/npm/jeelizfacefilter@latest/dist/',
-            callbackReady: function(errCode) {
-                if (errCode) {
-                    document.getElementById('readout').innerText = "CAMERA ERROR: " + errCode;
-                    return;
-                }
-                document.getElementById('readout').innerText = "TRACKING: ACTIVE";
-            },
-            callbackTrack: function(detectState) {
-                if (detectState.detected > 0.6) {
-                    // 顔の向きを取得 (ry=左右, rx=上下)
-                    headRotation.yaw = detectState.ry; 
-                    headRotation.pitch = detectState.rx;
-                }
-            }
-        });
+    // Post Processing
+    composer = new EffectComposer(renderer);
+    composer.addPass(new RenderPass(scene, camera));
+
+    bokehPass = new BokehPass(scene, camera, {
+      focus: 10.0,
+      aperture: 0.015,
+      maxblur: 0.012
+    });
+    composer.addPass(bokehPass);
+
+    window.addEventListener('resize', onWindowResize);
+  }
+
+  function onWindowResize() {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    composer.setSize(window.innerWidth, window.innerHeight);
+  }
+
+  /**
+   * Initialize MediaPipe Face Landmarker
+   */
+  async function initTracking() {
+    const vision = await FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.9/wasm"
+    );
+    
+    faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+        delegate: "GPU"
+      },
+      runningMode: "VIDEO",
+      outputFaceBlendshapes: true
+    });
+
+    video = document.getElementById('webcam-raw');
+    const stream = await navigator.mediaDevices.getUserMedia({ 
+      video: { width: 640, height: 480, frameRate: 30 } 
+    });
+    video.srcObject = stream;
+
+    return new Promise(resolve => {
+      video.onloadedmetadata = () => {
+        video.play();
+        overlay.style.opacity = '0';
+        setTimeout(() => overlay.style.display = 'none', 1000);
+        resolve();
+      };
+    });
+  }
+
+  /**
+   * Process Face Landmarks for Gaze and Convergence
+   */
+  function processTracking(landmarks) {
+    const irisL = landmarks[468];
+    const irisR = landmarks[473];
+
+    if (!irisL || !irisR) return;
+
+    // 1. Gaze Tracking Logic
+    // Average position of both irises
+    const rawGazeX = (irisL.x + irisR.x) / 2;
+    const rawGazeY = (irisL.y + irisR.y) / 2;
+
+    // Smoothing gaze point
+    gazePoint.x += (rawGazeX - gazePoint.x) * 0.2;
+    gazePoint.y += (rawGazeY - gazePoint.y) * 0.2;
+
+    // Update UI Cursor (Mirrored horizontally for natural feel)
+    const cursorX = (1 - gazePoint.x) * window.innerWidth;
+    const cursorY = gazePoint.y * window.innerHeight;
+    const cursor = document.getElementById('gaze-cursor');
+    cursor.style.left = `${cursorX}px`;
+    cursor.style.top = `${cursorY}px`;
+
+    // 2. Convergence (Cross-eye) Calculation
+    const dist = Math.sqrt(
+      Math.pow(irisR.x - irisL.x, 2) + Math.pow(irisR.y - irisL.y, 2)
+    );
+    
+    let convFactor = (APP_CONFIG.irisDistMax - dist) / (APP_CONFIG.irisDistMax - APP_CONFIG.irisDistMin);
+    convFactor = Math.max(0, Math.min(1, convFactor));
+
+    // 3. Raycasting to find target focus depth
+    const raycaster = new THREE.Raycaster();
+    // Convert normalized gaze coordinates to NDC (-1 to +1)
+    const ndcX = ((1 - gazePoint.x) * 2) - 1;
+    const ndcY = -(gazePoint.y * 2) + 1;
+
+    raycaster.setFromCamera({ x: ndcX, y: ndcY }, camera);
+    const intersects = raycaster.intersectObjects(scene.children);
+
+    let targetZ = 0; // Default background Z
+    if (intersects.length > 0) {
+      // Base depth from looked-at object
+      const objDist = intersects[0].distance;
+      // Adjust focus depth based on convergence (offsetting depth)
+      const depthAdjustment = convFactor * 10; 
+      targetZ = objDist - depthAdjustment;
     }
 
-    // --- ループ処理 ---
-    function render() {
-        if (!isInitialized || !panner) return;
-        
-        const now = audioCtx.currentTime;
-        const scale = 15;
-        
-        const rx = coord.x * scale;
-        const ry = coord.y * scale;
-        const rz = coord.z * scale;
+    // Smoothly interpolate focus
+    bokehPass.uniforms.focus.value += (targetZ - bokehPass.uniforms.focus.value) * APP_CONFIG.lerpSpeed;
 
-        // 1. 音源の位置を更新
-        panner.positionX.setTargetAtTime(rx, now, 0.05);
-        panner.positionY.setTargetAtTime(ry, now, 0.05);
-        panner.positionZ.setTargetAtTime(rz, now, 0.05);
+    // Update Telemetry UI
+    uiGaze.innerText = `${(1-gazePoint.x).toFixed(2)}, ${gazePoint.y.toFixed(2)}`;
+    uiConv.innerText = `${(convFactor * 100).toFixed(0)}%`;
+    uiDepth.innerText = bokehPass.uniforms.focus.value.toFixed(2);
+  }
 
-        // 2. リスナー（自分）の向きを更新！
-        // 顔の向きに合わせて、Web Audio APIのListenerの向きベクトルを設定
-        if (audioCtx.listener.forwardX) {
-            // モダンなブラウザ用
-            const fx = Math.sin(headRotation.yaw);
-            const fz = -Math.cos(headRotation.yaw);
-            audioCtx.listener.forwardX.setTargetAtTime(fx, now, 0.05);
-            audioCtx.listener.forwardZ.setTargetAtTime(fz, now, 0.05);
-        } else {
-            // 旧式ブラウザ用
-            audioCtx.listener.setOrientation(Math.sin(headRotation.yaw), 0, -Math.cos(headRotation.yaw), 0, 1, 0);
-        }
+  /**
+   * Main Animation Loop
+   */
+  function animate() {
+    requestAnimationFrame(animate);
 
-        // 物理フィルタ
-        const dist = Math.sqrt(rx*rx + ry*ry + rz*rz);
-        mainFilter.frequency.setTargetAtTime(Math.max(1500, 20000 - dist * 600), now, 0.1);
+    // Object orbital movement
+    scene.children.forEach(obj => {
+      if (obj instanceof THREE.Mesh) {
+        obj.rotation.y += 0.01;
+        obj.position.y += Math.sin(Date.now() * 0.001 + obj.position.x) * 0.01;
+      }
+    });
 
-        // UI更新
-        document.getElementById('nodeXZ').style.left = ((coord.x + 1) / 2 * 100) + '%';
-        document.getElementById('nodeXZ').style.top = ((coord.z + 1) / 2 * 100) + '%';
-        
-        // アイコンを顔の向きに合わせて回転させる
-        document.getElementById('headIcon').style.transform = `translate(-50%, -50%) rotate(${headRotation.yaw * 57.3}deg)`;
-        
-        document.getElementById('readout').innerText = `HEAD: ${(headRotation.yaw * 57.3).toFixed(0)}° | POS X:${rx.toFixed(1)} Z:${rz.toFixed(1)}`;
-        
-        requestAnimationFrame(render);
+    if (faceLandmarker && video.currentTime !== lastVideoTime) {
+      lastVideoTime = video.currentTime;
+      const results = faceLandmarker.detectForVideo(video, performance.now());
+      if (results.faceLandmarks && results.faceLandmarks[0]) {
+        processTracking(results.faceLandmarks[0]);
+      }
     }
 
-    // --- ハンドラー ---
-    document.getElementById('cameraBtn').onclick = () => {
-        if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
-        initTracker();
-    };
+    composer.render();
+  }
 
-    document.getElementById('file').onchange = (e) => {
-        if (e.target.files[0]) setupAudio(e.target.files[0]);
-    };
+  // ENTRY POINT
+  initThree();
+  initTracking().then(animate).catch(err => {
+    document.getElementById('loading-status').innerText = "CAMERA ACCESS DENIED";
+    console.error(err);
+  });
 
-    function handleInput(gridId) {
-        const grid = document.getElementById(gridId);
-        let active = false;
-        const update = (e) => {
-            if (!active) return;
-            const r = grid.getBoundingClientRect();
-            const t = e.touches ? e.touches[0] : e;
-            coord.x = (t.clientX - r.left) / r.width * 2 - 1;
-            coord.z = (t.clientY - r.top) / r.height * 2 - 1;
-        };
-        grid.addEventListener('mousedown', (e) => { active = true; update(e); });
-        window.addEventListener('mousemove', update);
-        window.addEventListener('mouseup', () => active = false);
-        grid.addEventListener('touchstart', (e) => { active = true; update(e); }, {passive: false});
-        window.addEventListener('touchmove', (e) => { if(active) update(e); }, {passive: false});
-        window.addEventListener('touchend', () => active = false);
-    }
-    handleInput('gridXZ');
-
-    function resetPos() { coord = { x: 0, y: 0, z: -1 }; headRotation = { yaw: 0, pitch: 0 }; }
 </script>
 </body>
 </html>
