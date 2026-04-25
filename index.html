@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>Spatial Computing Mode</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: -apple-system, sans-serif; }
         video { display: none; }
         #overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -18,7 +18,6 @@
         .start-btn {
             padding: 16px 50px; border-radius: 30px; background: #fff; color: #000;
             font-weight: 600; font-size: 16px; cursor: pointer; border: none;
-            box-shadow: 0 10px 25px rgba(0,0,0,0.4);
         }
         #XRButton { display: none !important; }
     </style>
@@ -32,22 +31,26 @@
     <video id="input_video" playsinline></video>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424515/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
     <script type="module">
-        // 安定した esm.sh からインポート
         import * as THREE from 'https://esm.sh/three@0.150.0';
         import { VRButton } from 'https://esm.sh/three@0.150.0/examples/jsm/webxr/VRButton.js';
 
-        let scene, camera, renderer, world, cubeMesh, cubeBody;
+        let scene, camera, renderer, world, cubeMesh, cubeBody, hands;
         const tipMeshes = [], tipBodies = [];
 
         async function init() {
-            scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x000000);
-            scene.add(new THREE.GridHelper(50, 50, 0x222222, 0x111111));
+            // --- 1. MediaPipe 初期化 (最初に1回だけ) ---
+            hands = new window.Hands({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424515/${file}`
+            });
+            hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
 
+            // --- 2. Three.js & WebXR ---
+            scene = new THREE.Scene();
+            scene.add(new THREE.GridHelper(50, 50, 0x222222, 0x111111));
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
             
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -56,12 +59,11 @@
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
 
-            // VRボタンを生成して隠し設置
             const vrBtn = VRButton.createButton(renderer);
             vrBtn.id = "XRButton";
             document.body.appendChild(vrBtn);
 
-            // 物理エンジン Cannon.js
+            // --- 3. Physics ---
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
             const pMat = new CANNON.Material({ friction: 4.0 });
@@ -100,14 +102,11 @@
 
             createUI(THREE);
 
-            // カメラとMediaPipe
+            // --- 4. Camera Setup ---
             const video = document.getElementById('input_video');
             const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
             video.srcObject = stream;
             await video.play();
-
-            const hands = new window.Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
-            hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
 
             hands.onResults((results) => {
                 if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
@@ -122,10 +121,12 @@
                 }
             });
 
+            // メインループ
             renderer.setAnimationLoop(() => {
                 world.step(1/60);
                 cubeMesh.position.copy(cubeBody.position);
                 cubeMesh.quaternion.copy(cubeBody.quaternion);
+                // 描画ループ内で安定して実行
                 if (video.readyState >= 2) hands.send({ image: video });
                 renderer.render(scene, camera);
             });
@@ -133,14 +134,13 @@
 
         function createUI(THREE) {
             const canvas = document.createElement('canvas');
-            canvas.width = 512; canvas.height = 256;
+            canvas.width = 512; canvas.height = 128;
             const ctx = canvas.getContext('2d');
             ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-            ctx.beginPath(); ctx.roundRect(0, 0, 512, 256, 40); ctx.fill();
-            ctx.fillStyle = 'white';
-            ctx.font = 'bold 44px sans-serif'; ctx.fillText('Spatial Center', 60, 90);
+            ctx.beginPath(); ctx.roundRect(0, 0, 512, 128, 40); ctx.fill();
+            ctx.fillStyle = 'white'; ctx.font = 'bold 36px sans-serif'; ctx.fillText('Spatial Center', 40, 75);
             const texture = new THREE.CanvasTexture(canvas);
-            const plane = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.4), new THREE.MeshBasicMaterial({ map: texture, transparent: true, side: THREE.DoubleSide }));
+            const plane = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.2), new THREE.MeshBasicMaterial({ map: texture, transparent: true }));
             plane.position.set(1.0, 1.8, -1.2); plane.rotation.y = -0.5;
             scene.add(plane);
         }
