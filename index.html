@@ -3,91 +3,98 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>3DoF Spatial Studio</title>
+    <title>6DoF VR Studio - White Fog</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; }
-        /* 背面のカメラ映像 */
-        #video-container {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            object-fit: cover; z-index: -2;
-        }
-        /* 白いカバー効果 */
-        #white-overlay {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(255, 255, 255, 0.2);
-            backdrop-filter: brightness(1.1);
-            pointer-events: none; z-index: -1;
-        }
-        #start-screen {
-            position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
-            background: white; z-index: 100;
+        body { margin: 0; overflow: hidden; background: #fff; font-family: sans-serif; }
+        #overlay {
+            position: fixed; inset: 0; display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            background: #fff; z-index: 1000;
         }
         .btn {
             background: #4285F4; color: white; border: none; padding: 20px 40px;
-            border-radius: 50px; font-size: 18px; font-weight: bold;
+            border-radius: 50px; font-size: 18px; font-weight: bold; cursor: pointer;
         }
     </style>
 </head>
 <body>
-    <video id="video-container" autoplay playsinline></video>
-    <div id="white-overlay"></div>
-    <div id="start-screen">
-        <button class="btn" id="start-btn">同期を開始（ジャイロ使用）</button>
+    <div id="overlay">
+        <h1 style="color:#333;">VR 6DoF Sync</h1>
+        <button class="btn" id="start-btn">VRを開始（移動同期）</button>
+        <p style="color:#666; font-size:12px; margin-top:10px;">スマホを持って動くと空間を移動できます</p>
     </div>
 
-    <script>
-        let scene, camera, renderer;
+    <script type="module">
+        import { VRButton } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/webxr/VRButton.js';
+
+        let scene, camera, renderer, world, cubeMesh, cubeBody;
+        let xrActive = false;
 
         async function init() {
-            document.getElementById('start-screen').remove();
-
-            // 1. カメラ映像の開始
-            const video = document.getElementById('video-container');
-            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-            video.srcObject = stream;
-
-            // 2. Three.js セットアップ
+            // --- Scene & Renderer ---
             scene = new THREE.Scene();
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            scene.background = new THREE.Color(0xeeeeee); // 少しグレーがかった白背景
             
-            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            // 「白いカバー」の効果をフォグ（霧）で再現
+            // 近くははっきり、遠く(5m以上)は白く消える
+            scene.fog = new THREE.Fog(0xeeeeee, 1, 8);
+
+            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 100);
+            
+            renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.xr.enabled = true;
+            renderer.xr.setReferenceSpaceType('local-floor'); // 床を基準に移動を計算
             document.body.appendChild(renderer.domElement);
 
-            // 仮想世界のオブジェクト
-            const grid = new THREE.GridHelper(10, 20, 0x888888, 0x444444);
-            grid.position.y = -1.5; // 足元にグリッド
+            // --- Physics ---
+            world = new CANNON.World();
+            world.gravity.set(0, -9.8, 0);
+
+            // 地面（仮想の床）
+            const grid = new THREE.GridHelper(50, 50, 0xcccccc, 0xdddddd);
             scene.add(grid);
 
-            const cube = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5), new THREE.MeshNormalMaterial());
-            cube.position.set(0, 0, -3); // 正面3mに箱
-            scene.add(cube);
+            // 浮いている立方体
+            cubeMesh = new THREE.Mesh(
+                new THREE.BoxGeometry(0.2, 0.2, 0.2),
+                new THREE.MeshStandardMaterial({ color: 0x4285F4 })
+            );
+            scene.add(cubeMesh);
 
-            // 3. ジャイロセンサーの同期 (iOS対応のためリクエストが必要)
-            if (typeof DeviceOrientationEvent.requestPermission === 'function') {
-                const permission = await DeviceOrientationEvent.requestPermission();
-                if (permission === 'granted') window.addEventListener('deviceorientation', handleOrientation);
-            } else {
-                window.addEventListener('deviceorientation', handleOrientation);
+            cubeBody = new CANNON.Body({ mass: 1 });
+            cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.1, 0.1, 0.1)));
+            cubeBody.position.set(0, 2, -1); // 目の前少し上に配置
+            world.addBody(cubeBody);
+
+            scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+            const light = new THREE.DirectionalLight(0xffffff, 0.5);
+            light.position.set(1, 10, 1);
+            scene.add(light);
+
+            // --- WebXR VR Session ---
+            try {
+                // VRモードとして開始（実写背景なし）
+                const session = await navigator.xr.requestSession('immersive-vr', {
+                    requiredFeatures: ['local-floor']
+                });
+                await renderer.xr.setSession(session);
+                xrActive = true;
+                document.getElementById('overlay').remove();
+            } catch (e) {
+                alert("VR起動失敗: " + e.message + "\n※Android Chromeなどで試してください。");
+                return;
             }
 
-            function handleOrientation(event) {
-                // スマホの回転をカメラに反映
-                const alpha = event.alpha ? THREE.MathUtils.degToRad(event.alpha) : 0; // z
-                const beta = event.beta ? THREE.MathUtils.degToRad(event.beta) : 0;   // x
-                const gamma = event.gamma ? THREE.MathUtils.degToRad(event.gamma) : 0; // y
-
-                const euler = new THREE.Euler(beta, alpha, -gamma, 'YXZ');
-                camera.quaternion.setFromEuler(euler);
-            }
-
-            function animate() {
-                requestAnimationFrame(animate);
+            renderer.setAnimationLoop(() => {
+                if (!xrActive) return;
+                world.step(1/60);
+                cubeMesh.position.copy(cubeBody.position);
+                cubeMesh.quaternion.copy(cubeBody.quaternion);
                 renderer.render(scene, camera);
-            }
-            animate();
+            });
         }
 
         document.getElementById('start-btn').onclick = init;
