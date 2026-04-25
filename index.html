@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>10-Point Physics VR - Back Camera</title>
+    <title>Full Gyro Physics VR</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
@@ -10,51 +10,79 @@
     <style>
         body { margin: 0; overflow: hidden; background: #000; }
         video { display: none; }
+        #overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8); color: white; display: flex;
+            align-items: center; justify-content: center; z-index: 1000;
+            font-family: sans-serif; cursor: pointer;
+        }
     </style>
 </head>
 <body>
+    <div id="overlay">画面をタップして開始（センサーとカメラの起動）</div>
     <video id="input_video" playsinline></video>
 
     <script>
         let scene, camera, renderer, world, cubeMesh, cubeBody;
-        const jointIndices = [4,3, 8,7, 12,11, 16,15, 20,19];
         const tipMeshes = [], tipBodies = [];
 
+        // --- 1. ジャイロセンサーの同期 ---
+        function setupGyro() {
+            window.addEventListener('deviceorientation', (e) => {
+                if (e.alpha !== null) {
+                    // スマホの傾きをカメラの回転に反映
+                    const alpha = THREE.MathUtils.degToRad(e.alpha); // z
+                    const beta = THREE.MathUtils.degToRad(e.beta);   // x
+                    const gamma = THREE.MathUtils.degToRad(e.gamma); // y
+                    
+                    // ゴーグル装着時の向き（YXZ順）
+                    camera.rotation.set(beta, gamma, alpha, 'YXZ');
+                }
+            }, true);
+        }
+
         async function init() {
-            // --- Three.js & VR Setup ---
+            // iOSのセンサー許可リクエスト
+            if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+                await DeviceOrientationEvent.requestPermission();
+            }
+            setupGyro();
+
+            // --- 2. Three.js セットアップ ---
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x050505);
-            scene.add(new THREE.GridHelper(10, 10, 0x333333, 0x222222));
+            scene.add(new THREE.GridHelper(20, 20, 0x444444, 0x222222));
 
-            camera = new THREE.PerspectiveCamera(70, (window.innerWidth / 2) / window.innerHeight, 0.1, 100);
+            camera = new THREE.PerspectiveCamera(75, (window.innerWidth / 2) / window.innerHeight, 0.1, 100);
             camera.position.set(0, 1.6, 0);
+            // カメラの回転順序を指定
+            camera.rotation.order = 'YXZ';
 
             renderer = new THREE.WebGLRenderer({ antialias: false });
-            renderer.setPixelRatio(1);
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
 
             scene.add(new THREE.AmbientLight(0xffffff, 0.4));
-            const light = new THREE.PointLight(0xffffff, 1);
-            light.position.set(0, 2, 1);
+            const light = new THREE.DirectionalLight(0xffffff, 1);
+            light.position.set(1, 2, 1);
             scene.add(light);
 
-            // --- Cannon.js (Physics) ---
+            // --- 3. Cannon.js (物理エンジン) ---
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
-            const pMat = new CANNON.Material({ friction: 2.0 });
+            const pMat = new CANNON.Material({ friction: 2.5 });
 
-            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.15, 0.15), new THREE.MeshPhongMaterial({ color: 0x00ffaa }));
+            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.2), new THREE.MeshStandardMaterial({ color: 0x00ffaa }));
             scene.add(cubeMesh);
-            cubeBody = new CANNON.Body({ mass: 0.12, material: pMat });
-            cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.075, 0.075, 0.075)));
-            cubeBody.position.set(0, 1.5, -0.4);
+            cubeBody = new CANNON.Body({ mass: 0.1, material: pMat });
+            cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.1, 0.1, 0.1)));
+            cubeBody.position.set(0, 1.5, -0.6);
             cubeBody.collisionFilterGroup = 2;
             cubeBody.collisionFilterMask = 1;
             world.addBody(cubeBody);
 
             const jGeo = new THREE.SphereGeometry(0.015, 6, 6);
-            jointIndices.forEach(() => {
+            for (let i = 0; i < 21; i++) {
                 const mesh = new THREE.Mesh(jGeo, new THREE.MeshBasicMaterial({ color: 0xffffff }));
                 scene.add(mesh);
                 tipMeshes.push(mesh);
@@ -64,22 +92,23 @@
                 body.collisionFilterMask = 2;
                 world.addBody(body);
                 tipBodies.push(body);
-            });
+            }
 
-            // --- MediaPipe & Back Camera Force ---
+            // --- 4. MediaPipe & Camera ---
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
             hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
 
             hands.onResults((results) => {
                 if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
                     const lm = results.multiHandLandmarks[0];
-                    jointIndices.forEach((idx, i) => {
-                        const point = lm[idx];
+                    lm.forEach((point, i) => {
+                        // カメラの向きに基づいて手の位置を計算
                         const v = new THREE.Vector3(
-                            (point.x - 0.5) * 1.5, 
-                            -(point.y - 0.5) * 1.1, 
-                            -point.z * 2 - 0.4
+                            (point.x - 0.5) * 1.6, 
+                            -(point.y - 0.5) * 1.2, 
+                            -point.z * 2 - 0.5
                         ).applyQuaternion(camera.quaternion).add(camera.position);
+
                         tipBodies[i].position.copy(v);
                         tipMeshes[i].position.copy(v);
                     });
@@ -87,28 +116,17 @@
             });
 
             const videoElement = document.getElementById('input_video');
-            
-            // Cameraクラスを使わず、自前で背面カメラを指定して起動
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { 
-                        facingMode: "environment", // 背面カメラ
-                        width: { ideal: 640 },
-                        height: { ideal: 480 }
-                    }
-                });
-                videoElement.srcObject = stream;
-                videoElement.play();
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: "environment", width: 480, height: 270 }
+            });
+            videoElement.srcObject = stream;
+            videoElement.play();
 
-                const processFrame = async () => {
-                    await hands.send({ image: videoElement });
-                    requestAnimationFrame(processFrame);
-                };
-                processFrame();
-            } catch (err) {
-                console.error("Camera Error:", err);
-                alert("背面カメラが見つからないか、許可されていません");
-            }
+            const processFrame = async () => {
+                await hands.send({ image: videoElement });
+                requestAnimationFrame(processFrame);
+            };
+            processFrame();
 
             animate();
         }
@@ -121,17 +139,22 @@
 
             const w = window.innerWidth, h = window.innerHeight;
             renderer.setScissorTest(true);
-            // Left Eye
+            
+            // 左目
             renderer.setScissor(0, 0, w/2, h);
             renderer.setViewport(0, 0, w/2, h);
             renderer.render(scene, camera);
-            // Right Eye
+            
+            // 右目
             renderer.setScissor(w/2, 0, w/2, h);
             renderer.setViewport(w/2, 0, w/2, h);
             renderer.render(scene, camera);
         }
 
-        window.onload = () => init();
+        document.getElementById('overlay').addEventListener('click', () => {
+            document.getElementById('overlay').style.display = 'none';
+            init();
+        });
     </script>
 </body>
 </html>
