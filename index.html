@@ -2,90 +2,113 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Smartphone VR Hand Tracking</title>
+  <title>VR Hand Pinch Tracking</title>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
   <style>
     body { margin: 0; overflow: hidden; background: #000; display: flex; }
-    
-    /* 左右のビューポート設定 */
-    .view {
-      position: relative;
-      width: 50vw;
-      height: 100vh;
-      overflow: hidden;
-      border-right: 1px solid #333;
-    }
+    .view { position: relative; width: 50vw; height: 100vh; overflow: hidden; border-right: 1px solid #333; }
+    video { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
 
-    video {
+    /* 指先のポイント */
+    .dot {
       position: absolute;
-      top: 0; left: 0;
-      width: 100%; height: 100%;
-      object-fit: cover;
-      transform: scaleX(-1); /* 鏡合わせ */
-    }
-
-    /* 左右それぞれのカーソル */
-    .cursor {
-      position: absolute;
-      width: 20px; height: 20px;
-      border: 2px solid white;
+      width: 15px; height: 15px;
       border-radius: 50%;
-      background: rgba(0, 255, 255, 0.5);
       transform: translate(-50%, -50%);
-      display: none;
       z-index: 100;
+      display: none;
+      transition: background 0.1s;
     }
+    
+    /* 状態による色の定義 */
+    .state-detect { background: #ff0000; box-shadow: 0 0 10px #ff0000; } /* 赤：検知中 */
+    .state-pinch { background: #00ff00; box-shadow: 0 0 15px #00ff00; scale: 1.5; } /* 緑：ピンチ */
 
-    /* 左右それぞれのターゲットボタン */
     .target {
-      position: absolute;
-      top: 50%; left: 50%;
-      transform: translate(-50%, -50%);
-      padding: 15px 30px;
-      border: 2px solid white;
-      color: white;
-      font-family: sans-serif;
-      background: rgba(255,255,255,0.1);
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      padding: 20px; border: 2px solid white; color: white; font-family: sans-serif;
+      background: rgba(255,255,255,0.1); transition: 0.2s;
     }
+    .active { background: rgba(0, 255, 0, 0.4); transform: translate(-50%, -50%) scale(1.1); }
   </style>
 </head>
 <body>
 
-  <div class="view" id="leftView">
+  <div class="view" id="left">
     <video class="input_video"></video>
-    <div class="cursor" id="cursorL"></div>
-    <div class="target">VR TARGET</div>
+    <div id="thumbL" class="dot"></div>
+    <div id="indexL" class="dot"></div>
+    <div class="target" id="btnL">SELECT</div>
   </div>
 
-  <div class="view" id="rightView">
+  <div class="view" id="right">
     <video class="input_video"></video>
-    <div class="cursor" id="cursorR"></div>
-    <div class="target">VR TARGET</div>
+    <div id="thumbR" class="dot"></div>
+    <div id="indexR" class="dot"></div>
+    <div class="target" id="btnR">SELECT</div>
   </div>
 
   <script>
     const videoElements = document.querySelectorAll('.input_video');
-    const cursorL = document.getElementById('cursorL');
-    const cursorR = document.getElementById('cursorR');
+    const dots = {
+      thumbL: document.getElementById('thumbL'),
+      indexL: document.getElementById('indexL'),
+      thumbR: document.getElementById('thumbR'),
+      indexR: document.getElementById('indexR')
+    };
+    const buttons = [document.getElementById('btnL'), document.getElementById('btnR')];
 
     function onResults(results) {
       if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-        const landmarks = results.multiHandLandmarks[0];
-        const indexTip = landmarks[8];
+        const hand = results.multiHandLandmarks[0];
+        const thumb = hand[4];  // 親指先
+        const index = hand[8];  // 人差し指先
 
-        // 座標計算（0.0 ~ 1.0）
-        const x = (1 - indexTip.x);
-        const y = indexTip.y;
+        // 2点間の距離を計算 (3D距離)
+        const distance = Math.sqrt(
+          Math.pow(thumb.x - index.x, 2) +
+          Math.pow(thumb.y - index.y, 2) +
+          Math.pow(thumb.z - index.z, 2)
+        );
 
-        // 左右のカーソルを更新
-        [cursorL, cursorR].forEach(cursor => {
-          cursor.style.display = 'block';
-          cursor.style.left = `${x * 100}%`;
-          cursor.style.top = `${y * 100}%`;
+        const isPinching = distance < 0.05; // 距離が0.05以下ならピンチと判定
+        const xI = (1 - index.x) * 100;
+        const yI = index.y * 100;
+        const xT = (1 - thumb.x) * 100;
+        const yT = thumb.y * 100;
+
+        // 左右のドット更新
+        ["L", "R"].forEach(side => {
+          const t = dots[`thumb${side}`];
+          const i = dots[`index${side}`];
+          t.style.display = i.style.display = 'block';
+          
+          t.style.left = `${xT}%`; t.style.top = `${yT}%`;
+          i.style.left = `${xI}%`; i.style.top = `${yI}%`;
+
+          // 色の切り替え
+          if (isPinching) {
+            t.className = i.className = 'dot state-pinch';
+          } else {
+            t.className = i.className = 'dot state-detect';
+          }
         });
+
+        // ボタンとの当たり判定（人差し指が重なっていて、かつピンチしているか）
+        const rect = buttons[0].getBoundingClientRect();
+        const cursorX = (xI / 100) * window.innerWidth / 2;
+        const cursorY = (yI / 100) * window.innerHeight;
+
+        if (cursorX > rect.left && cursorX < rect.right && cursorY > rect.top && cursorY < rect.bottom) {
+          if (isPinching) {
+            buttons.forEach(b => b.classList.add('active'));
+          } else {
+            buttons.forEach(b => b.classList.remove('active'));
+          }
+        }
       } else {
-        cursorL.style.display = cursorR.style.display = 'none';
+        Object.values(dots).forEach(d => d.style.display = 'none');
       }
     }
 
@@ -96,26 +119,17 @@
     hands.setOptions({
       maxNumHands: 1,
       modelComplexity: 1,
-      minDetectionConfidence: 0.7,
-      minTrackingConfidence: 0.7
+      minDetectionConfidence: 0.8,
+      minTrackingConfidence: 0.8
     });
 
     hands.onResults(onResults);
 
-    // 1つのカメラストリームを両方のビデオ要素に流す
-    navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "environment" }
-    }).then(stream => {
-      videoElements.forEach(video => {
-        video.srcObject = stream;
-        video.play();
-      });
-
-      // 毎フレーム解析を実行（代表して1つのビデオから）
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
+    .then(stream => {
+      videoElements.forEach(v => { v.srcObject = stream; v.play(); });
       const camera = new Camera(videoElements[0], {
-        onFrame: async () => {
-          await hands.send({image: videoElements[0]});
-        },
+        onFrame: async () => { await hands.send({image: videoElements[0]}); },
         width: 640, height: 480
       });
       camera.start();
