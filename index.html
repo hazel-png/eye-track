@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Index Finger Only - VR Physics</title>
+    <title>10-Point Physics VR - Back Camera</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
@@ -13,15 +13,15 @@
     </style>
 </head>
 <body>
-    <video id="input_video"></video>
+    <video id="input_video" playsinline></video>
 
     <script>
         let scene, camera, renderer, world, cubeMesh, cubeBody;
-        // 人差し指の先端(8)と第一関節(7)のみ
-        const jointIndices = [8, 7]; 
+        const jointIndices = [4,3, 8,7, 12,11, 16,15, 20,19];
         const tipMeshes = [], tipBodies = [];
 
         async function init() {
+            // --- Three.js & VR Setup ---
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x050505);
             scene.add(new THREE.GridHelper(10, 10, 0x333333, 0x222222));
@@ -39,33 +39,34 @@
             light.position.set(0, 2, 1);
             scene.add(light);
 
-            // --- 物理エンジン ---
+            // --- Cannon.js (Physics) ---
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
-            const pMat = new CANNON.Material({ friction: 1.0 });
+            const pMat = new CANNON.Material({ friction: 2.0 });
 
-            // 箱
             cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.15, 0.15), new THREE.MeshPhongMaterial({ color: 0x00ffaa }));
             scene.add(cubeMesh);
-            cubeBody = new CANNON.Body({ mass: 0.1, material: pMat });
+            cubeBody = new CANNON.Body({ mass: 0.12, material: pMat });
             cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.075, 0.075, 0.075)));
             cubeBody.position.set(0, 1.5, -0.4);
+            cubeBody.collisionFilterGroup = 2;
+            cubeBody.collisionFilterMask = 1;
             world.addBody(cubeBody);
 
-            // 人差し指用球体（2点）
-            const jGeo = new THREE.SphereGeometry(0.02, 8, 8);
+            const jGeo = new THREE.SphereGeometry(0.015, 6, 6);
             jointIndices.forEach(() => {
                 const mesh = new THREE.Mesh(jGeo, new THREE.MeshBasicMaterial({ color: 0xffffff }));
                 scene.add(mesh);
                 tipMeshes.push(mesh);
-
                 const body = new CANNON.Body({ mass: 0, material: pMat });
-                body.addShape(new CANNON.Sphere(0.02));
+                body.addShape(new CANNON.Sphere(0.015));
+                body.collisionFilterGroup = 1;
+                body.collisionFilterMask = 2;
                 world.addBody(body);
                 tipBodies.push(body);
             });
 
-            // --- Hand Tracking ---
+            // --- MediaPipe & Back Camera Force ---
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
             hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
 
@@ -79,31 +80,55 @@
                             -(point.y - 0.5) * 1.1, 
                             -point.z * 2 - 0.4
                         ).applyQuaternion(camera.quaternion).add(camera.position);
-
                         tipBodies[i].position.copy(v);
                         tipMeshes[i].position.copy(v);
                     });
                 }
             });
 
-            const cam = new Camera(document.getElementById('input_video'), {
-                onFrame: async () => { await hands.send({ image: document.getElementById('input_video') }); },
-                width: 480, height: 270
-            });
-            cam.start();
+            const videoElement = document.getElementById('input_video');
+            
+            // Cameraクラスを使わず、自前で背面カメラを指定して起動
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { 
+                        facingMode: "environment", // 背面カメラ
+                        width: { ideal: 640 },
+                        height: { ideal: 480 }
+                    }
+                });
+                videoElement.srcObject = stream;
+                videoElement.play();
+
+                const processFrame = async () => {
+                    await hands.send({ image: videoElement });
+                    requestAnimationFrame(processFrame);
+                };
+                processFrame();
+            } catch (err) {
+                console.error("Camera Error:", err);
+                alert("背面カメラが見つからないか、許可されていません");
+            }
+
             animate();
         }
 
         function animate() {
             requestAnimationFrame(animate);
-            world.step(1/60);
+            world.step(1/40);
             cubeMesh.position.copy(cubeBody.position);
             cubeMesh.quaternion.copy(cubeBody.quaternion);
 
             const w = window.innerWidth, h = window.innerHeight;
             renderer.setScissorTest(true);
-            renderer.setScissor(0, 0, w/2, h); renderer.setViewport(0, 0, w/2, h); renderer.render(scene, camera);
-            renderer.setScissor(w/2, 0, w/2, h); renderer.setViewport(w/2, 0, w/2, h); renderer.render(scene, camera);
+            // Left Eye
+            renderer.setScissor(0, 0, w/2, h);
+            renderer.setViewport(0, 0, w/2, h);
+            renderer.render(scene, camera);
+            // Right Eye
+            renderer.setScissor(w/2, 0, w/2, h);
+            renderer.setViewport(w/2, 0, w/2, h);
+            renderer.render(scene, camera);
         }
 
         window.onload = () => init();
