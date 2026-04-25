@@ -2,128 +2,91 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>10-Point Physics VR - SBS Mode</title>
+    <title>Super Light VR</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-    <style>
-        body { margin: 0; overflow: hidden; background: #000; }
-        video { display: none; }
-    </style>
+    <style>body { margin: 0; overflow: hidden; background: #000; } video { display: none; }</style>
 </head>
 <body>
     <video id="input_video"></video>
-
     <script>
-        let scene, camera, renderer, world, cubeMesh, cubeBody;
-        const jointIndices = [4,3, 8,7, 12,11, 16,15, 20,19]; // 5本指の先と第一関節
-        const tipMeshes = [], tipBodies = [];
+        let scene, camera, renderer, world, cubeMesh, cubeBody, fingerMesh, fingerBody;
 
         async function init() {
-            // --- Three.js ---
+            // --- Three.js (描画負荷を最小に) ---
             scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x050505);
-            scene.add(new THREE.GridHelper(10, 10, 0x333333, 0x222222));
-
-            // VR用のカメラ設定
-            camera = new THREE.PerspectiveCamera(70, (window.innerWidth / 2) / window.innerHeight, 0.1, 100);
+            camera = new THREE.PerspectiveCamera(70, (window.innerWidth/2)/window.innerHeight, 0.1, 50);
             camera.position.set(0, 1.6, 0);
 
-            renderer = new THREE.WebGLRenderer({ antialias: false });
+            renderer = new THREE.WebGLRenderer({ antialias: false, precision: "lowp" });
             renderer.setPixelRatio(1);
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
 
-            scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+            scene.add(new THREE.AmbientLight(0xffffff, 0.5));
             const light = new THREE.PointLight(0xffffff, 1);
             light.position.set(0, 2, 1);
             scene.add(light);
 
-            // --- Cannon.js (物理エンジン) ---
+            // --- Cannon.js (計算を1点に) ---
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
-            world.solver.iterations = 5;
-            const pMat = new CANNON.Material({ friction: 2.0 });
-
-            // キューブ
-            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.15, 0.15), new THREE.MeshPhongMaterial({ color: 0x00ffaa }));
+            
+            // 箱
+            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.2), new THREE.MeshPhongMaterial({ color: 0x00ffaa }));
             scene.add(cubeMesh);
-            cubeBody = new CANNON.Body({ mass: 0.12, material: pMat });
-            cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.075, 0.075, 0.075)));
+            cubeBody = new CANNON.Body({ mass: 0.1 });
+            cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.1, 0.1, 0.1)));
             cubeBody.position.set(0, 1.5, -0.4);
-            cubeBody.collisionFilterGroup = 2;
-            cubeBody.collisionFilterMask = 1;
             world.addBody(cubeBody);
 
-            // 指10ポイント
-            const jGeo = new THREE.SphereGeometry(0.015, 6, 6);
-            jointIndices.forEach(() => {
-                const mesh = new THREE.Mesh(jGeo, new THREE.MeshBasicMaterial({ color: 0xffffff }));
-                scene.add(mesh);
-                tipMeshes.push(mesh);
+            // 指（人差し指のみ）
+            fingerMesh = new THREE.Mesh(new THREE.SphereGeometry(0.03, 4, 4), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+            scene.add(fingerMesh);
+            fingerBody = new CANNON.Body({ mass: 0 }); // 質量0（固定）
+            fingerBody.addShape(new CANNON.Sphere(0.03));
+            world.addBody(fingerBody);
 
-                const body = new CANNON.Body({ mass: 0, material: pMat });
-                body.addShape(new CANNON.Sphere(0.015));
-                body.collisionFilterGroup = 1;
-                body.collisionFilterMask = 2;
-                world.addBody(body);
-                tipBodies.push(body);
-            });
-
-            // --- MediaPipe ---
+            // --- MediaPipe (解像度を最小に) ---
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
-            hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
+            hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
 
             hands.onResults((results) => {
                 if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-                    const lm = results.multiHandLandmarks[0];
-                    jointIndices.forEach((idx, i) => {
-                        const point = lm[idx];
-                        const v = new THREE.Vector3(
-                            (point.x - 0.5) * 1.5, 
-                            -(point.y - 0.5) * 1.1, 
-                            -point.z * 2 - 0.4
-                        ).applyQuaternion(camera.quaternion).add(camera.position);
-
-                        tipBodies[i].position.copy(v);
-                        tipMeshes[i].position.copy(v);
-                    });
+                    const tip = results.multiHandLandmarks[0][8]; // 人差し指先のみ
+                    const v = new THREE.Vector3((tip.x - 0.5) * 1.5, -(tip.y - 0.5) * 1.1, -tip.z * 2 - 0.4)
+                              .applyQuaternion(camera.quaternion).add(camera.position);
+                    fingerBody.position.copy(v);
+                    fingerMesh.position.copy(v);
                 }
             });
 
             const cam = new Camera(document.getElementById('input_video'), {
                 onFrame: async () => { await hands.send({ image: document.getElementById('input_video') }); },
-                width: 480, height: 270
+                width: 256, height: 144 // 超低解像度
             });
             cam.start();
-
             animate();
         }
 
         function animate() {
             requestAnimationFrame(animate);
-            world.step(1/40);
+            world.step(1/30); // 物理更新を間引く
             cubeMesh.position.copy(cubeBody.position);
             cubeMesh.quaternion.copy(cubeBody.quaternion);
 
             const w = window.innerWidth, h = window.innerHeight;
-            
-            // レンダリングを左右に分割
             renderer.setScissorTest(true);
-
-            // 左目
-            renderer.setScissor(0, 0, w/2, h);
-            renderer.setViewport(0, 0, w/2, h);
+            // 左
+            renderer.setScissor(0, 0, w/2, h); renderer.setViewport(0, 0, w/2, h);
             renderer.render(scene, camera);
-
-            // 右目
-            renderer.setScissor(w/2, 0, w/2, h);
-            renderer.setViewport(w/2, 0, w/2, h);
+            // 右
+            renderer.setScissor(w/2, 0, w/2, h); renderer.setViewport(w/2, 0, w/2, h);
             renderer.render(scene, camera);
         }
-
-        window.onload = () => init();
+        window.onload = init;
     </script>
 </body>
 </html>
