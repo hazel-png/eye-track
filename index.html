@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>6DoF Spatial Studio - Fixed</title>
+    <title>6DoF AR Studio - Custom Overlay</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
@@ -11,21 +11,35 @@
     <style>
         body { margin: 0; overflow: hidden; background: transparent; font-family: sans-serif; }
         video { display: none; }
+
+        /* 現実世界の上に被せる「半透明の黒いカバー（少し白っぽく）」 */
+        #ar-filter {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background-color: rgba(30, 30, 30, 0.4); /* 黒ベースの半透明 */
+            backdrop-filter: brightness(1.2) contrast(0.8); /* 少し白っぽく飛ばす */
+            -webkit-backdrop-filter: brightness(1.2) contrast(0.8);
+            pointer-events: none; /* タッチ操作を透過させる */
+            z-index: 1; /* 3Dモデルの後ろ、カメラ映像の前 */
+            display: none;
+        }
+
         #start-overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             display: flex; flex-direction: column; align-items: center; justify-content: center;
-            background: rgba(255,255,255,0.95); z-index: 2000;
+            background: white; z-index: 2000;
         }
+
         .btn {
             background: #4285F4; color: white; border: none; padding: 20px 40px;
             border-radius: 50px; font-size: 20px; font-weight: bold; cursor: pointer;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         }
     </style>
 </head>
 <body>
+    <div id="ar-filter"></div>
+
     <div id="start-overlay">
-        <button class="btn" id="start-btn">ARセッションを開始</button>
+        <button class="btn" id="start-btn">ARを開始（等身大/6DoF）</button>
     </div>
     <video id="input_video" playsinline></video>
 
@@ -37,10 +51,10 @@
         const _v = new THREE.Vector3();
 
         async function init() {
-            const startBtn = document.getElementById('start-btn');
-            if (!startBtn) return;
+            // UIとフィルターの制御
+            document.getElementById('start-overlay').remove();
+            document.getElementById('ar-filter').style.display = 'block';
 
-            // --- Scene Setup ---
             scene = new THREE.Scene();
             camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
 
@@ -50,17 +64,17 @@
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
 
-            // --- Physics ---
+            // Physics
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
             const mat = new CANNON.Material();
             world.addContactMaterial(new CANNON.ContactMaterial(mat, mat, { friction: 0.7, restitution: 0.1 }));
 
-            // --- Objects ---
+            // Objects (Desk & Cube)
             const deskH = 1.2;
             const deskMesh = new THREE.Mesh(
                 new THREE.BoxGeometry(0.8, 0.04, 0.4),
-                new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 })
+                new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.4 })
             );
             deskMesh.position.set(0, deskH, -0.5);
             scene.add(deskMesh);
@@ -87,15 +101,11 @@
             }
             scene.add(new THREE.AmbientLight(0xffffff, 1.0));
 
-            // --- WebXR session ---
-            const sessionInit = { requiredFeatures: ['local-floor'] };
-            const session = await navigator.xr.requestSession('immersive-ar', sessionInit);
-            
-            // 重要：レンダラーにセッションをセットする前に一度描画状態をクリア
+            // WebXR Session
+            const session = await navigator.xr.requestSession('immersive-ar', { requiredFeatures: ['local-floor'] });
             await renderer.xr.setSession(session);
-            document.getElementById('start-overlay').remove();
 
-            // --- MediaPipe ---
+            // MediaPipe
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
             hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.8, minTrackingConfidence: 0.8 });
 
@@ -127,17 +137,10 @@
             });
         }
 
-        // DOMが読み込まれてからリスナーを登録
         window.addEventListener('DOMContentLoaded', () => {
-            const btn = document.getElementById('start-btn');
-            if (btn) {
-                btn.addEventListener('click', () => {
-                    init().catch(err => {
-                        console.error("AR Start Error:", err);
-                        alert("ARの開始に失敗しました。HTTPS環境かつAR対応端末か確認してください。");
-                    });
-                });
-            }
+            document.getElementById('start-btn').addEventListener('click', () => {
+                init().catch(console.error);
+            });
         });
     </script>
 </body>
