@@ -3,185 +3,102 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>WebXR Spatial Studio</title>
+    <title>WebXR Spatial Studio - Solid Hands</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
     <style>
-        :root { 
-            --ios-bg: rgba(30, 30, 30, 0.75); 
-            --ios-accent: #007AFF; 
-            --ios-text: #ffffff;
-        }
-        body { 
-            margin: 0; overflow: hidden; background: #000; 
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        }
+        :root { --ios-accent: #007AFF; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: -apple-system, sans-serif; }
         video { display: none; }
-
         #ios-ui {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             display: flex; align-items: center; justify-content: center;
-            background: linear-gradient(180deg, #2c3e50 0%, #000 100%);
-            z-index: 2000; color: var(--ios-text); transition: all 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+            background: #000; z-index: 2000; color: white; transition: 0.6s;
         }
-
-        .glass-card {
-            background: var(--ios-bg);
-            backdrop-filter: blur(25px);
-            -webkit-backdrop-filter: blur(25px);
-            border-radius: 35px;
-            padding: 30px;
-            width: 85%;
-            max-width: 340px;
-            text-align: center;
-            border: 1px solid rgba(255,255,255,0.15);
-            box-shadow: 0 20px 50px rgba(0,0,0,0.4);
-        }
-
-        .status-list {
-            text-align: left;
-            background: rgba(255,255,255,0.05);
-            border-radius: 15px;
-            margin: 20px 0;
-            padding: 10px 15px;
-        }
-        .status-item {
-            display: flex; justify-content: space-between;
-            padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.1);
-            font-size: 13px;
-        }
-        .status-item:last-child { border-bottom: none; }
-        .status-label { opacity: 0.6; }
-        .status-value { font-weight: 600; color: var(--ios-accent); }
-
-        h1 { font-weight: 700; font-size: 26px; margin: 0 0 5px 0; letter-spacing: -0.5px; }
-        p { font-size: 14px; opacity: 0.7; margin-bottom: 10px; }
-
         .start-btn {
             background: var(--ios-accent); color: white; border: none; 
-            width: 100%; padding: 16px; border-radius: 18px;
-            font-size: 17px; font-weight: 600; cursor: pointer;
-            transition: all 0.2s; margin-top: 10px;
-        }
-        .start-btn:active { transform: scale(0.97); opacity: 0.8; }
-
-        #VRButton { 
-            border-radius: 14px !important; 
-            background: rgba(255,255,255,0.1) !important; 
-            backdrop-filter: blur(10px);
-            border: 0.5px solid rgba(255,255,255,0.2) !important;
-            bottom: 50px !important;
-            font-weight: 600 !important;
+            padding: 20px 40px; border-radius: 20px; font-size: 20px; font-weight: bold;
         }
     </style>
 </head>
 <body>
-    <div id="ios-ui">
-        <div class="glass-card">
-            <h1>Spatial Studio</h1>
-            <p>ワークスペースを最適化しました</p>
-            
-            <div class="status-list">
-                <div class="status-item">
-                    <span class="status-label">カメラモード</span>
-                    <span class="status-value">背面 (Environment)</span>
-                </div>
-                <div class="status-item">
-                    <span class="status-label">机の高さ</span>
-                    <span class="status-value">1.50m (顔の高さ)</span>
-                </div>
-                <div class="status-item">
-                    <span class="status-label">位置設定</span>
-                    <span class="status-value">手前 (Near)</span>
-                </div>
-            </div>
-
-            <button class="start-btn" id="start-btn">アクセスを許可</button>
-        </div>
-    </div>
+    <div id="ios-ui"><button class="start-btn" id="start-btn">スタジオを開始</button></div>
     <video id="input_video" playsinline></video>
 
     <script type="module">
         import { VRButton } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/webxr/VRButton.js';
 
         let scene, camera, renderer, world, cubeMesh, cubeBody;
-        const tipMeshes = [], tipBodies = [];
+        const joints = [], bones = []; // 骨（シリンダー）を管理する配列
+
+        // 手の接続マップ（どの関節とどの関節をつなぐか）
+        const HAND_CONNECTIONS = [
+            [0,1],[1,2],[2,3],[3,4],       // 親指
+            [0,5],[5,6],[6,7],[7,8],       // 人差し指
+            [5,9],[9,10],[10,11],[11,12],  // 中指
+            [9,13],[13,14],[14,15],[15,16],// 薬指
+            [13,17],[17,18],[18,19],[19,20],[0,17] // 小指 + 手のひら下部
+        ];
 
         async function init() {
-            document.getElementById('ios-ui').style.opacity = '0';
-            document.getElementById('ios-ui').style.transform = 'scale(1.1)';
-            setTimeout(() => document.getElementById('ios-ui').style.display = 'none', 600);
+            document.getElementById('ios-ui').style.display = 'none';
 
             scene = new THREE.Scene();
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
-            
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-            renderer.setPixelRatio(window.devicePixelRatio);
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
             document.body.appendChild(VRButton.createButton(renderer));
 
-            scene.add(new THREE.AmbientLight(0xffffff, 0.8));
-            const light = new THREE.DirectionalLight(0xffffff, 0.6);
-            light.position.set(2, 5, 2);
-            scene.add(light);
-
+            scene.add(new THREE.AmbientLight(0xffffff, 1.0));
+            
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
 
-            // --- 机 (Desk) 設定変更 ---
-            const deskHeight = 1.5; // 顔の高さ (1.5m)
-            const deskZPos = -0.25; // かなり手前に (0.4 -> 0.25)
-            const deskWidth = 1.0;
-            const deskDepth = 0.5;
-
-            const deskGeo = new THREE.BoxGeometry(deskWidth, 0.04, deskDepth);
-            const deskMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.1 });
-            const deskMesh = new THREE.Mesh(deskGeo, deskMat);
-            deskMesh.position.set(0, deskHeight, deskZPos);
+            // 机の設定（顔の高さ・手前）
+            const deskHeight = 1.5, deskZ = -0.25;
+            const deskMesh = new THREE.Mesh(new THREE.BoxGeometry(1, 0.04, 0.5), new THREE.MeshStandardMaterial({color: 0x444444}));
+            deskMesh.position.set(0, deskHeight, deskZ);
             scene.add(deskMesh);
-
-            // 脚（高さに合わせてスケール調整）
-            const legGeo = new THREE.CylinderGeometry(0.015, 0.015, deskHeight);
-            // 机の四隅に合わせて脚を配置 (Z軸はdeskZPosを基準にオフセット)
-            [[0.45, 0.2], [-0.45, 0.2], [0.45, -0.2], [-0.45, -0.2]].forEach(p => {
-                const leg = new THREE.Mesh(legGeo, deskMat);
-                leg.position.set(p[0], deskHeight/2, deskZPos + p[1]);
-                scene.add(leg);
-            });
-
             const deskBody = new CANNON.Body({ mass: 0 });
-            deskBody.addShape(new CANNON.Box(new CANNON.Vec3(deskWidth/2, 0.02, deskDepth/2)));
-            deskBody.position.set(0, deskHeight, deskZPos);
+            deskBody.addShape(new CANNON.Box(new CANNON.Vec3(0.5, 0.02, 0.25)));
+            deskBody.position.set(0, deskHeight, deskZ);
             world.addBody(deskBody);
 
-            // --- ターゲット (キューブ) ---
-            cubeMesh = new THREE.Mesh(
-                new THREE.BoxGeometry(0.18, 0.18, 0.18),
-                new THREE.MeshStandardMaterial({ color: 0x007AFF, metalness: 0.4, roughness: 0.2 })
-            );
+            // キューブ（摩擦を強く設定）
+            const cubeSize = 0.15;
+            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize), new THREE.MeshStandardMaterial({color: 0x007AFF}));
             scene.add(cubeMesh);
-            cubeBody = new CANNON.Body({ mass: 0.4 });
-            cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.09, 0.09, 0.09)));
-            // 机の高さの少し上に配置
-            cubeBody.position.set(0, deskHeight + 0.3, deskZPos);
+            cubeBody = new CANNON.Body({ mass: 0.5 });
+            cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(cubeSize/2, cubeSize/2, cubeSize/2)));
+            cubeBody.position.set(0, deskHeight + 0.5, deskZ);
+            cubeBody.material = new CANNON.Material({friction: 0.5});
             world.addBody(cubeBody);
 
-            // --- 手の関節 ---
+            // 手の関節（球体）の作成
             for (let i = 0; i < 21; i++) {
-                const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.012), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+                const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.015), new THREE.MeshBasicMaterial({color: 0xffffff}));
                 scene.add(mesh);
-                tipMeshes.push(mesh);
-                const body = new CANNON.Body({ mass: 0 });
-                body.addShape(new CANNON.Sphere(0.012));
+                const body = new CANNON.Body({ mass: 0, collisionFilterGroup: 2 });
+                body.addShape(new CANNON.Sphere(0.015));
                 world.addBody(body);
-                tipBodies.push(body);
+                joints.push({mesh, body});
             }
 
-            // --- Camera & MediaPipe ---
+            // 手の骨（シリンダー）の作成
+            HAND_CONNECTIONS.forEach(() => {
+                const mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 1), new THREE.MeshBasicMaterial({color: 0xcccccc}));
+                scene.add(mesh);
+                const body = new CANNON.Body({ mass: 0, collisionFilterGroup: 2 });
+                // シリンダー形状はデフォルトでY軸向き
+                body.addShape(new CANNON.Cylinder(0.012, 0.012, 1, 8));
+                world.addBody(body);
+                bones.push({mesh, body});
+            });
+
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
             hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
 
@@ -189,14 +106,34 @@
                 if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
                     const lm = results.multiHandLandmarks[0];
                     const xrCamera = renderer.xr.getCamera(camera);
-                    lm.forEach((point, i) => {
-                        const v = new THREE.Vector3(
-                            (point.x - 0.5) * 1.4, 
-                            -(point.y - 0.5) * 1.4, 
-                            -point.z * 1.2 - 0.25 
-                        ).applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
-                        tipBodies[i].position.copy(v);
-                        tipMeshes[i].position.copy(v);
+
+                    // 関節位置の更新
+                    const points = lm.map(point => {
+                        const v = new THREE.Vector3((point.x - 0.5) * 1.5, -(point.y - 0.5) * 1.5, -point.z * 1.5 - 0.3)
+                                  .applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
+                        return v;
+                    });
+
+                    points.forEach((v, i) => {
+                        joints[i].body.position.copy(v);
+                        joints[i].mesh.position.copy(v);
+                    });
+
+                    // 骨（つなぎ目）の更新
+                    HAND_CONNECTIONS.forEach((conn, i) => {
+                        const start = points[conn[0]];
+                        const end = points[conn[1]];
+                        const dist = start.distanceTo(end);
+                        const center = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
+
+                        const bone = bones[i];
+                        bone.mesh.position.copy(center);
+                        bone.mesh.scale.set(1, dist, 1);
+                        bone.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), end.clone().sub(start).normalize());
+                        
+                        bone.body.position.copy(bone.mesh.position);
+                        bone.body.quaternion.copy(bone.mesh.quaternion);
+                        // CANNONのCylinder形状を動的に変えるのは難しいため、簡易的に位置と向きだけ同期
                     });
                 }
             });
@@ -204,8 +141,7 @@
             const videoElement = document.getElementById('input_video');
             const cameraStream = new Camera(videoElement, {
                 onFrame: async () => { await hands.send({ image: videoElement }); },
-                facingMode: "environment",
-                width: 1280, height: 720
+                facingMode: "environment", width: 1280, height: 720
             });
             cameraStream.start();
 
@@ -217,13 +153,7 @@
             });
         }
 
-        document.getElementById('start-btn').addEventListener('click', () => {
-            if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-                DeviceOrientationEvent.requestPermission().then(init).catch(console.error);
-            } else {
-                init();
-            }
-        });
+        document.getElementById('start-btn').onclick = init;
     </script>
 </body>
 </html>
