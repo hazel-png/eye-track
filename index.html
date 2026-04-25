@@ -5,34 +5,28 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>Spatial Computing Mode</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif; }
         video { display: none; }
-        
-        /* iPhone風 Splash Screen */
         #overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: radial-gradient(circle at center, #2c2c2e 0%, #000000 100%);
+            background: radial-gradient(circle at center, #2c2c2e 0%, #000 100%);
             display: flex; flex-direction: column; align-items: center; justify-content: center;
-            z-index: 2000; color: white; transition: opacity 0.8s ease;
+            z-index: 2000; color: white; transition: opacity 0.5s;
         }
-        .apple-logo { font-size: 60px; margin-bottom: 20px; font-weight: 100; }
-        .mode-text { letter-spacing: 2px; text-transform: uppercase; font-size: 12px; opacity: 0.6; margin-bottom: 40px; }
-        
+        .apple-logo { font-size: 60px; margin-bottom: 20px; }
+        .mode-text { letter-spacing: 2px; text-transform: uppercase; font-size: 11px; opacity: 0.5; margin-bottom: 40px; }
         .start-btn {
-            padding: 18px 60px; border-radius: 40px; background: #ffffff; color: #000000;
+            padding: 16px 50px; border-radius: 30px; background: #fff; color: #000;
             font-weight: 600; font-size: 16px; cursor: pointer; border: none;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.5); transition: all 0.3s;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.4);
         }
-        .start-btn:active { transform: scale(0.95); }
-        
-        /* WebXRボタンを隠す */
         #XRButton { display: none !important; }
     </style>
 </head>
 <body>
     <div id="overlay">
         <div class="apple-logo"></div>
-        <div class="mode-text">Spatial Computing Mode</div>
+        <div class="mode-text">Spatial Computing</div>
         <button class="start-btn" id="start-xr">Enter</button>
     </div>
     <video id="input_video" playsinline></video>
@@ -42,19 +36,17 @@
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
     <script type="module">
-        import * as THREE from 'https://cdn.skypack.dev/three@0.150.0';
-        import { VRButton } from 'https://cdn.skypack.dev/three@0.150.0/examples/jsm/webxr/VRButton.js';
+        // 安定した esm.sh からインポート
+        import * as THREE from 'https://esm.sh/three@0.150.0';
+        import { VRButton } from 'https://esm.sh/three@0.150.0/examples/jsm/webxr/VRButton.js';
 
         let scene, camera, renderer, world, cubeMesh, cubeBody;
         const tipMeshes = [], tipBodies = [];
 
         async function init() {
-            // --- 1. Three.js Setup ---
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x000000);
-            
-            const grid = new THREE.GridHelper(50, 50, 0x222222, 0x111111);
-            scene.add(grid);
+            scene.add(new THREE.GridHelper(50, 50, 0x222222, 0x111111));
 
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
             
@@ -64,20 +56,20 @@
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
 
-            // VRボタンの非表示設置
-            const vrBtnElement = VRButton.createButton(renderer);
-            vrBtnElement.id = "XRButton";
-            document.body.appendChild(vrBtnElement);
+            // VRボタンを生成して隠し設置
+            const vrBtn = VRButton.createButton(renderer);
+            vrBtn.id = "XRButton";
+            document.body.appendChild(vrBtn);
 
-            // --- 2. Cannon.js Physics ---
+            // 物理エンジン Cannon.js
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
             const pMat = new CANNON.Material({ friction: 4.0 });
 
-            const groundBody = new CANNON.Body({ mass: 0, material: pMat });
-            groundBody.addShape(new CANNON.Plane());
-            groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
-            world.addBody(groundBody);
+            const ground = new CANNON.Body({ mass: 0, material: pMat });
+            ground.addShape(new CANNON.Plane());
+            ground.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
+            world.addBody(ground);
 
             cubeMesh = new THREE.Mesh(
                 new THREE.BoxGeometry(0.2, 0.2, 0.2), 
@@ -89,9 +81,8 @@
             cubeBody.position.set(0, 1.5, -0.8);
             world.addBody(cubeBody);
 
-            const jGeo = new THREE.SphereGeometry(0.012, 8, 8);
             for (let i = 0; i < 21; i++) {
-                const m = new THREE.Mesh(jGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.7 }));
+                const m = new THREE.Mesh(new THREE.SphereGeometry(0.012, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.7 }));
                 scene.add(m);
                 tipMeshes.push(m);
                 const b = new CANNON.Body({ mass: 0, material: pMat });
@@ -109,56 +100,33 @@
 
             createUI(THREE);
 
-            // --- 3. Camera & Hand Tracking ---
-            const videoElement = document.getElementById('input_video');
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: "environment", width: 640, height: 480 }
-                });
-                videoElement.srcObject = stream;
-                await videoElement.play();
-            } catch (e) {
-                console.error("Camera access denied", e);
-            }
+            // カメラとMediaPipe
+            const video = document.getElementById('input_video');
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+            video.srcObject = stream;
+            await video.play();
 
-            // MediaPipe Hands 初期化 (global Hands を使用)
-            const hands = new window.Hands({ 
-                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` 
-            });
-            
-            hands.setOptions({ 
-                maxNumHands: 1, 
-                modelComplexity: 0, 
-                minDetectionConfidence: 0.7, 
-                minTrackingConfidence: 0.7 
-            });
+            const hands = new window.Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+            hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
 
             hands.onResults((results) => {
                 if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
                     const lm = results.multiHandLandmarks[0];
                     const xrCamera = renderer.xr.getCamera(camera);
                     lm.forEach((point, i) => {
-                        const v = new THREE.Vector3(
-                            (point.x - 0.5) * 2.0, 
-                            -(point.y - 0.5) * 1.5, 
-                            -point.z * 3.0 - 0.8
-                        ).applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
+                        const v = new THREE.Vector3((point.x - 0.5) * 2, -(point.y - 0.5) * 1.5, -point.z * 3 - 0.8)
+                            .applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
                         tipBodies[i].position.copy(v);
                         tipMeshes[i].position.copy(v);
                     });
                 }
             });
 
-            // メインループ
             renderer.setAnimationLoop(() => {
                 world.step(1/60);
                 cubeMesh.position.copy(cubeBody.position);
                 cubeMesh.quaternion.copy(cubeBody.quaternion);
-                
-                if (videoElement.readyState >= 2) {
-                    hands.send({ image: videoElement });
-                }
-                
+                if (video.readyState >= 2) hands.send({ image: video });
                 renderer.render(scene, camera);
             });
         }
@@ -168,40 +136,21 @@
             canvas.width = 512; canvas.height = 256;
             const ctx = canvas.getContext('2d');
             ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-            ctx.beginPath();
-            ctx.roundRect(0, 0, 512, 256, 40);
-            ctx.fill();
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
-            ctx.lineWidth = 4;
-            ctx.stroke();
+            ctx.beginPath(); ctx.roundRect(0, 0, 512, 256, 40); ctx.fill();
             ctx.fillStyle = 'white';
-            ctx.font = 'bold 44px -apple-system, sans-serif';
-            ctx.fillText('Spatial Center', 60, 90);
-            ctx.font = '24px -apple-system, sans-serif';
-            ctx.globalAlpha = 0.7;
-            ctx.fillText(' Intelligence Active', 60, 160);
-            
+            ctx.font = 'bold 44px sans-serif'; ctx.fillText('Spatial Center', 60, 90);
             const texture = new THREE.CanvasTexture(canvas);
-            const plane = new THREE.Mesh(
-                new THREE.PlaneGeometry(0.8, 0.4),
-                new THREE.MeshBasicMaterial({ map: texture, transparent: true, side: THREE.DoubleSide })
-            );
-            plane.position.set(1.0, 1.8, -1.2);
-            plane.rotation.y = -0.5;
+            const plane = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.4), new THREE.MeshBasicMaterial({ map: texture, transparent: true, side: THREE.DoubleSide }));
+            plane.position.set(1.0, 1.8, -1.2); plane.rotation.y = -0.5;
             scene.add(plane);
         }
 
-        // 開始ボタンのイベント
         document.getElementById('start-xr').addEventListener('click', async () => {
-            const overlay = document.getElementById('overlay');
-            overlay.style.opacity = '0';
-            setTimeout(() => overlay.style.display = 'none', 800);
-            
+            document.getElementById('overlay').style.opacity = '0';
+            setTimeout(() => document.getElementById('overlay').remove(), 500);
             await init();
-            
-            // WebXRセッションのトリガー
-            const xrBtn = document.getElementById('XRButton');
-            if (xrBtn) xrBtn.click();
+            const btn = document.getElementById('XRButton');
+            if (btn) btn.click();
         });
     </script>
 </body>
