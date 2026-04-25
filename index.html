@@ -2,66 +2,75 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>VR Hand Pinch Tracking - Fixed</title>
+  <title>VR Hand Pinch with Calibration</title>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
   <style>
-    body { margin: 0; overflow: hidden; background: #000; display: flex; }
+    body { margin: 0; overflow: hidden; background: #000; display: flex; font-family: sans-serif; }
     .view { position: relative; width: 50vw; height: 100vh; overflow: hidden; border-right: 1px solid #333; }
     video { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
 
-    .dot {
-      position: absolute; width: 20px; height: 20px; border-radius: 50%;
-      transform: translate(-50%, -50%); z-index: 100; display: none;
-    }
+    .dot { position: absolute; width: 15px; height: 15px; border-radius: 50%; transform: translate(-50%, -50%); z-index: 100; display: none; }
     .state-detect { background: #ff0000; box-shadow: 0 0 10px #ff0000; }
     .state-pinch { background: #00ff00; box-shadow: 0 0 20px #00ff00; transform: translate(-50%, -50%) scale(1.5); }
 
-    .target {
-      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-      padding: 30px; border: 3px solid white; color: white; font: bold 20px sans-serif;
-      background: rgba(255,255,255,0.1); border-radius: 10px;
+    /* 通知メッセージ */
+    .msg {
+      position: absolute; top: 20%; left: 50%; transform: translateX(-50%);
+      color: white; background: rgba(0,0,0,0.6); padding: 10px 20px; border-radius: 20px; text-align: center; z-index: 200;
     }
-    .active { background: rgba(0, 255, 0, 0.5); border-color: #00ff00; transform: translate(-50%, -50%) scale(1.2); }
+    .btn-calib {
+      position: absolute; bottom: 10%; left: 50%; transform: translateX(-50%);
+      padding: 15px 30px; background: orange; color: white; border: none; border-radius: 10px; font-weight: bold; z-index: 200;
+    }
   </style>
 </head>
 <body>
 
   <div class="view">
     <video class="input_video"></video>
-    <div id="thumbL" class="dot"></div>
-    <div id="indexL" class="dot"></div>
-    <div class="target" id="btnL">SELECT</div>
+    <div class="msg" id="msgL">画面下のボタンで<br>キャリブレーション開始</div>
+    <div id="thumbL" class="dot"></div><div id="indexL" class="dot"></div>
+    <button class="btn-calib" onclick="startCalibration()">CALIBRATE</button>
   </div>
 
   <div class="view">
     <video class="input_video"></video>
-    <div id="thumbR" class="dot"></div>
-    <div id="indexR" class="dot"></div>
-    <div class="target" id="btnR">SELECT</div>
+    <div class="msg" id="msgR">画面下のボタンで<br>キャリブレーション開始</div>
+    <div id="thumbR" class="dot"></div><div id="indexR" class="dot"></div>
+    <button class="btn-calib" onclick="startCalibration()">CALIBRATE</button>
   </div>
 
   <script>
+    let pinchThreshold = 0.05; // デフォルト値
+    let isCalibrating = false;
+    let calibData = [];
+
+    window.startCalibration = () => {
+      isCalibrating = true;
+      calibData = [];
+      document.querySelectorAll('.msg').forEach(m => m.innerHTML = "指をくっつけたまま<br>3秒待機...");
+      
+      setTimeout(() => {
+        if (calibData.length > 0) {
+          // 記録された距離の平均値を出し、少し余裕を持たせる
+          const avg = calibData.reduce((a, b) => a + b) / calibData.length;
+          pinchThreshold = avg + 0.015; 
+          document.querySelectorAll('.msg').forEach(m => m.innerHTML = "完了！");
+        } else {
+          document.querySelectorAll('.msg').forEach(m => m.innerHTML = "手が検知できませんでした");
+        }
+        isCalibrating = false;
+        setTimeout(() => document.querySelectorAll('.msg').forEach(m => m.innerHTML = ""), 2000);
+      }, 3000);
+    };
+
     window.addEventListener('load', () => {
       const videoElements = document.querySelectorAll('.input_video');
-      const dots = {
-        thumbL: document.getElementById('thumbL'),
-        indexL: document.getElementById('indexL'),
-        thumbR: document.getElementById('thumbR'),
-        indexR: document.getElementById('indexR')
-      };
-      const buttons = [document.getElementById('btnL'), document.getElementById('btnR')];
+      const dots = { thumbL: document.getElementById('thumbL'), indexL: document.getElementById('indexL'), thumbR: document.getElementById('thumbR'), indexR: document.getElementById('indexR') };
 
-      const hands = new Hands({
-        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
-      });
-
-      hands.setOptions({
-        maxNumHands: 1,
-        modelComplexity: 1,
-        minDetectionConfidence: 0.7,
-        minTrackingConfidence: 0.7
-      });
+      const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+      hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
 
       hands.onResults((results) => {
         if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
@@ -69,61 +78,41 @@
           const thumb = hand[4];
           const index = hand[8];
 
-          // 距離計算
-          const distance = Math.sqrt(
-            Math.pow(thumb.x - index.x, 2) + Math.pow(thumb.y - index.y, 2)
-          );
+          const distance = Math.sqrt(Math.pow(thumb.x - index.x, 2) + Math.pow(thumb.y - index.y, 2));
 
-          const isPinching = distance < 0.06;
-          const xI = (1 - index.x) * 100;
-          const yI = index.y * 100;
-          const xT = (1 - thumb.x) * 100;
-          const yT = thumb.y * 100;
+          // キャリブレーション中は距離データを蓄積
+          if (isCalibrating) {
+            calibData.push(distance);
+          }
+
+          const isPinching = distance < pinchThreshold;
+          const xI = (1 - index.x) * 100; const yI = index.y * 100;
+          const xT = (1 - thumb.x) * 100; const yT = thumb.y * 100;
 
           ["L", "R"].forEach(side => {
-            const t = dots[`thumb${side}`];
-            const i = dots[`index${side}`];
+            const t = dots[`thumb${side}`], i = dots[`index${side}`];
             t.style.display = i.style.display = 'block';
             t.style.left = `${xT}%`; t.style.top = `${yT}%`;
             i.style.left = `${xI}%`; i.style.top = `${yI}%`;
             t.className = i.className = isPinching ? 'dot state-pinch' : 'dot state-detect';
           });
-
-          // ボタン判定（左側の座標系を基準に計算）
-          const rect = buttons[0].getBoundingClientRect();
-          const curX = (xI / 100) * (window.innerWidth / 2);
-          const curY = (yI / 100) * window.innerHeight;
-
-          if (curX > rect.left && curX < rect.right && curY > rect.top && curY < rect.bottom) {
-            if (isPinching) buttons.forEach(b => b.classList.add('active'));
-            else buttons.forEach(b => b.classList.remove('active'));
-          } else {
-            buttons.forEach(b => b.classList.remove('active'));
-          }
         } else {
           Object.values(dots).forEach(d => d.style.display = 'none');
         }
       });
 
-      // カメラ起動処理を1つに統合
       const camera = new Camera(videoElements[0], {
-        onFrame: async () => {
-          await hands.send({image: videoElements[0]});
-        },
-        width: 1280,
-        height: 720,
-        facingMode: "environment"
+        onFrame: async () => { await hands.send({image: videoElements[0]}); },
+        width: 1280, height: 720, facingMode: "environment"
       });
 
-      // 1つ目のビデオのストリームを2つ目にも同期させる
       videoElements[0].onplay = () => {
-        videoElements[1].srcObject = videoElements[0].captureStream ? 
-                                     videoElements[0].captureStream() : 
-                                     videoElements[0].mozCaptureStream();
+        const stream = videoElements[0].captureStream ? videoElements[0].captureStream() : videoElements[0].mozCaptureStream();
+        videoElements[1].srcObject = stream;
         videoElements[1].play();
       };
 
-      camera.start().catch(err => console.error("Camera Error:", err));
+      camera.start();
     });
   </script>
 </body>
