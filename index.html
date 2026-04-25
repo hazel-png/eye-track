@@ -3,39 +3,103 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>WebXR Physics Desk</title>
+    <title>WebXR Spatial Studio</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
     <style>
-        :root { --ios-bg: rgba(25, 25, 25, 0.7); --ios-accent: #0A84FF; }
-        body { margin: 0; overflow: hidden; background: #000; font-family: -apple-system, sans-serif; }
+        :root { 
+            --ios-bg: rgba(30, 30, 30, 0.75); 
+            --ios-accent: #007AFF; 
+            --ios-text: #ffffff;
+        }
+        body { 
+            margin: 0; overflow: hidden; background: #000; 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
         video { display: none; }
+
+        /* iOS風 ロック画面/コントロールセンター風UI */
         #ios-ui {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             display: flex; align-items: center; justify-content: center;
-            background: radial-gradient(circle at center, #1c1c1e 0%, #000 100%);
-            z-index: 2000; color: white; transition: opacity 0.5s;
+            background: linear-gradient(180deg, #2c3e50 0%, #000 100%);
+            z-index: 2000; color: var(--ios-text); transition: all 0.6s cubic-bezier(0.4, 0, 0.2, 1);
         }
+
         .glass-card {
-            background: var(--ios-bg); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
-            border-radius: 30px; padding: 40px; width: 80%; max-width: 320px; text-align: center;
-            border: 1px solid rgba(255,255,255,0.1);
+            background: var(--ios-bg);
+            backdrop-filter: blur(25px);
+            -webkit-backdrop-filter: blur(25px);
+            border-radius: 35px;
+            padding: 30px;
+            width: 85%;
+            max-width: 340px;
+            text-align: center;
+            border: 1px solid rgba(255,255,255,0.15);
+            box-shadow: 0 20px 50px rgba(0,0,0,0.4);
         }
+
+        .status-list {
+            text-align: left;
+            background: rgba(255,255,255,0.05);
+            border-radius: 15px;
+            margin: 20px 0;
+            padding: 10px 15px;
+        }
+        .status-item {
+            display: flex; justify-content: space-between;
+            padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.1);
+            font-size: 13px;
+        }
+        .status-item:last-child { border-bottom: none; }
+        .status-label { opacity: 0.6; }
+        .status-value { font-weight: 600; color: var(--ios-accent); }
+
+        h1 { font-weight: 700; font-size: 26px; margin: 0 0 5px 0; letter-spacing: -0.5px; }
+        p { font-size: 14px; opacity: 0.7; margin-bottom: 10px; }
+
         .start-btn {
-            background: var(--ios-accent); color: white; border: none; padding: 15px 40px;
-            border-radius: 25px; font-size: 16px; font-weight: 600; cursor: pointer;
+            background: var(--ios-accent); color: white; border: none; 
+            width: 100%; padding: 16px; border-radius: 18px;
+            font-size: 17px; font-weight: 600; cursor: pointer;
+            transition: all 0.2s; margin-top: 10px;
         }
-        #VRButton { border-radius: 20px !important; background: var(--ios-bg) !important; bottom: 40px !important; }
+        .start-btn:active { transform: scale(0.97); opacity: 0.8; }
+
+        #VRButton { 
+            border-radius: 14px !important; 
+            background: rgba(255,255,255,0.1) !important; 
+            backdrop-filter: blur(10px);
+            border: 0.5px solid rgba(255,255,255,0.2) !important;
+            bottom: 50px !important;
+            font-weight: 600 !important;
+        }
     </style>
 </head>
 <body>
     <div id="ios-ui">
         <div class="glass-card">
-            <h1>Spatial Desk</h1>
-            <p>目の前の机の上にオブジェクトを用意しました。<br>背面カメラでAR体験を開始します。</p>
-            <button class="start-btn" id="start-btn">開始する</button>
+            <h1>Spatial Studio</h1>
+            <p>ワークスペースを最適化しました</p>
+            
+            <div class="status-list">
+                <div class="status-item">
+                    <span class="status-label">カメラモード</span>
+                    <span class="status-value">背面 (Environment)</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">机の高さ</span>
+                    <span class="status-value">1.05m (調整済み)</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">トラッキング</span>
+                    <span class="status-value">Hand API v1</span>
+                </div>
+            </div>
+
+            <button class="start-btn" id="start-btn">アクセスを許可</button>
         </div>
     </div>
     <video id="input_video" playsinline></video>
@@ -48,11 +112,12 @@
 
         async function init() {
             document.getElementById('ios-ui').style.opacity = '0';
-            setTimeout(() => document.getElementById('ios-ui').style.display = 'none', 500);
+            document.getElementById('ios-ui').style.transform = 'scale(1.1)';
+            setTimeout(() => document.getElementById('ios-ui').style.display = 'none', 600);
 
-            // --- Three.js Setup ---
             scene = new THREE.Scene();
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+            
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
             renderer.setPixelRatio(window.devicePixelRatio);
             renderer.setSize(window.innerWidth, window.innerHeight);
@@ -60,70 +125,61 @@
             document.body.appendChild(renderer.domElement);
             document.body.appendChild(VRButton.createButton(renderer));
 
-            scene.add(new THREE.AmbientLight(0xffffff, 0.7));
-            const light = new THREE.DirectionalLight(0xffffff, 0.8);
-            light.position.set(1, 5, 1);
+            scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+            const light = new THREE.DirectionalLight(0xffffff, 0.6);
+            light.position.set(2, 5, 2);
             scene.add(light);
 
-            // --- Cannon.js World ---
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
 
-            // --- 机 (Desk) の作成 ---
-            const deskHeight = 0.8; // 机の高さ
-            const deskWidth = 1.2;
-            const deskDepth = 0.6;
+            // --- 机 (Desk) 調整版 ---
+            const deskHeight = 1.05; // 高さをアップ（1.05m）
+            const deskWidth = 1.0;
+            const deskDepth = 0.5;
 
-            // 視覚的な机
-            const deskGeo = new THREE.BoxGeometry(deskWidth, 0.05, deskDepth);
-            const deskMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.2 });
+            const deskGeo = new THREE.BoxGeometry(deskWidth, 0.04, deskDepth);
+            const deskMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.1 });
             const deskMesh = new THREE.Mesh(deskGeo, deskMat);
-            deskMesh.position.set(0, deskHeight, -0.5); // プレイヤーの目の前
+            deskMesh.position.set(0, deskHeight, -0.4); // 少し手前に
             scene.add(deskMesh);
 
-            // 机の脚（iPhone Store風の細い脚）
-            const legGeo = new THREE.CylinderGeometry(0.02, 0.02, deskHeight);
-            const legPositions = [
-                [deskWidth/2.2, deskHeight/2, -0.5 + deskDepth/2.2],
-                [-deskWidth/2.2, deskHeight/2, -0.5 + deskDepth/2.2],
-                [deskWidth/2.2, deskHeight/2, -0.5 - deskDepth/2.2],
-                [-deskWidth/2.2, deskHeight/2, -0.5 - deskDepth/2.2]
-            ];
-            legPositions.forEach(pos => {
+            // 脚
+            const legGeo = new THREE.CylinderGeometry(0.015, 0.015, deskHeight);
+            [[0.45, -0.2], [-0.45, -0.2], [0.45, -0.6], [-0.45, -0.6]].forEach(p => {
                 const leg = new THREE.Mesh(legGeo, deskMat);
-                leg.position.set(...pos);
+                leg.position.set(p[0], deskHeight/2, p[1]);
                 scene.add(leg);
             });
 
-            // 物理的な机（上面のみ）
             const deskBody = new CANNON.Body({ mass: 0 });
-            deskBody.addShape(new CANNON.Box(new CANNON.Vec3(deskWidth/2, 0.025, deskDepth/2)));
-            deskBody.position.set(0, deskHeight, -0.5);
+            deskBody.addShape(new CANNON.Box(new CANNON.Vec3(deskWidth/2, 0.02, deskDepth/2)));
+            deskBody.position.set(0, deskHeight, -0.4);
             world.addBody(deskBody);
 
-            // --- ターゲット (Cube) ---
+            // --- ターゲット ---
             cubeMesh = new THREE.Mesh(
-                new THREE.BoxGeometry(0.15, 0.15, 0.15), 
-                new THREE.MeshStandardMaterial({ color: 0x0A84FF, metalness: 0.3, roughness: 0.2 })
+                new THREE.BoxGeometry(0.18, 0.18, 0.18), // 少し大きく
+                new THREE.MeshStandardMaterial({ color: 0x007AFF, metalness: 0.4, roughness: 0.2 })
             );
             scene.add(cubeMesh);
-            cubeBody = new CANNON.Body({ mass: 0.3 });
-            cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.075, 0.075, 0.075)));
-            cubeBody.position.set(0, deskHeight + 0.3, -0.5); // 机の少し上に配置
+            cubeBody = new CANNON.Body({ mass: 0.4 });
+            cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.09, 0.09, 0.09)));
+            cubeBody.position.set(0, deskHeight + 0.4, -0.4);
             world.addBody(cubeBody);
 
-            // --- ハンドトラッキング用関節 ---
+            // --- 手の関節 ---
             for (let i = 0; i < 21; i++) {
-                const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.015), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+                const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.012), new THREE.MeshBasicMaterial({ color: 0xffffff }));
                 scene.add(mesh);
                 tipMeshes.push(mesh);
                 const body = new CANNON.Body({ mass: 0 });
-                body.addShape(new CANNON.Sphere(0.015));
+                body.addShape(new CANNON.Sphere(0.012));
                 world.addBody(body);
                 tipBodies.push(body);
             }
 
-            // --- MediaPipe Hand Tracking (背面カメラ) ---
+            // --- Camera & MediaPipe ---
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
             hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
 
@@ -132,11 +188,10 @@
                     const lm = results.multiHandLandmarks[0];
                     const xrCamera = renderer.xr.getCamera(camera);
                     lm.forEach((point, i) => {
-                        // 手の位置をカメラの向き・位置に合わせてマッピング
                         const v = new THREE.Vector3(
-                            (point.x - 0.5) * 1.5, 
-                            -(point.y - 0.5) * 1.5, 
-                            -point.z * 1.2 - 0.3 // Z軸をより手前に調整
+                            (point.x - 0.5) * 1.4, 
+                            -(point.y - 0.5) * 1.4, 
+                            -point.z * 1.2 - 0.25 
                         ).applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
                         tipBodies[i].position.copy(v);
                         tipMeshes[i].position.copy(v);
