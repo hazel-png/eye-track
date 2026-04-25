@@ -3,47 +3,41 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>WebXR Spatial Studio - Camera Background</title>
+    <title>WebXR Spatial Studio - Real Scale</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
-        
-        /* カメラ映像を全画面で背面に配置 */
-        #input_video {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            object-fit: cover; z-index: -1; transform: scaleX(1); /* 背面カメラなら反転不要 */
-        }
-
+        video { display: none; }
         #start-overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            display: flex; align-items: center; justify-content: center;
             background: white; z-index: 2000;
         }
         .btn {
-            background: #4285F4; color: white; border: none; padding: 20px 40px;
-            border-radius: 50px; font-size: 20px; font-weight: bold; cursor: pointer;
+            background: #4285F4; color: white; border: none; padding: 15px 30px;
+            border-radius: 8px; font-size: 18px; cursor: pointer;
         }
     </style>
 </head>
 <body>
     <div id="start-overlay">
-        <button class="btn" id="start-btn">実写背景モードで開始</button>
+        <button class="btn" id="start-btn">等身大モードで開始</button>
     </div>
-    
     <video id="input_video" playsinline></video>
 
     <script type="module">
         import { VRButton } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/webxr/VRButton.js';
 
+        // --- 等身大のための設定値 ---
         const SCALE_CONFIG = {
-            handSpread: 1.15,
-            handVertical: 1.15,
-            handDepth: 1.3,
-            zOffset: -0.2,
-            fingerRadius: 0.015
+            handSpread: 1.15,    // 横方向の広がり（現実の腕の可動域に合わせる）
+            handVertical: 1.15,  // 縦方向
+            handDepth: 1.3,      // 前後方向
+            zOffset: -0.2,       // 体からの距離の起点
+            fingerRadius: 0.015  // 指の太さ（実寸に近い約3cm）
         };
 
         let scene, camera, renderer, world, cubeMesh, cubeBody;
@@ -53,33 +47,27 @@
         async function init() {
             document.getElementById('start-overlay').remove();
 
-            // --- Three.js Setup ---
             scene = new THREE.Scene();
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
-            
-            // alpha: true にすることで、3Dがない部分に背景（ビデオ）が見えるようになる
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-            renderer.setClearColor(0x000000, 0); // 背景を透明に設定
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
             document.body.appendChild(VRButton.createButton(renderer));
 
-            // --- Physics ---
+            // Physics
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
             const mat = new CANNON.Material();
+            world.addContactMaterial(new CANNON.ContactMaterial(mat, mat, { friction: 0.7, restitution: 0.1 }));
 
-            // Desk (半透明にしてビデオが見えるようにする)
-            const deskHeight = 1.3;
-            const deskMesh = new THREE.Mesh(
-                new THREE.BoxGeometry(1.0, 0.05, 0.5), 
-                new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.3 })
-            );
-            deskMesh.position.set(0, deskHeight, -0.4);
+            // Desk
+            const deskHeight = 1.5;
+            const deskMesh = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.05, 0.5), new THREE.MeshStandardMaterial({ color: 0xeeeeee }));
+            deskMesh.position.set(0, deskHeight, -0.25);
             scene.add(deskMesh);
 
-            const deskBody = new CANNON.Body({ mass: 0 });
+            const deskBody = new CANNON.Body({ mass: 0, material: mat });
             deskBody.addShape(new CANNON.Box(new CANNON.Vec3(0.5, 0.025, 0.25)));
             deskBody.position.copy(deskMesh.position);
             world.addBody(deskBody);
@@ -89,14 +77,15 @@
             scene.add(cubeMesh);
             cubeBody = new CANNON.Body({ mass: 0.3, material: mat });
             cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.05, 0.05, 0.05)));
-            cubeBody.position.set(0, deskHeight + 0.5, -0.4);
+            cubeBody.position.set(0, deskHeight + 0.2, -0.25);
             world.addBody(cubeBody);
 
-            // Fingers
+            // Fingers (Real Scale)
+            const fingerGeo = new THREE.SphereGeometry(SCALE_CONFIG.fingerRadius, 16, 16);
             for (let i = 0; i < 21; i++) {
-                const mesh = new THREE.Mesh(new THREE.SphereGeometry(SCALE_CONFIG.fingerRadius), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 }));
+                const mesh = new THREE.Mesh(fingerGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6 }));
                 scene.add(mesh);
-                const body = new CANNON.Body({ mass: 0 });
+                const body = new CANNON.Body({ mass: 0, material: mat });
                 body.addShape(new CANNON.Sphere(SCALE_CONFIG.fingerRadius));
                 world.addBody(body);
                 fingers.push({ mesh, body });
@@ -104,7 +93,7 @@
 
             scene.add(new THREE.AmbientLight(0xffffff, 1.0));
 
-            // --- Tracking (MediaPipe) ---
+            // Tracking
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
             hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.8, minTrackingConfidence: 0.8 });
 
@@ -115,24 +104,24 @@
 
                 landmarks.forEach((point, i) => {
                     const f = fingers[i];
+                    // 等身大スケールへのマッピング
                     _v.set(
                         (point.x - 0.5) * SCALE_CONFIG.handSpread, 
                         -(point.y - 0.5) * SCALE_CONFIG.handVertical, 
                         -point.z * SCALE_CONFIG.handDepth + SCALE_CONFIG.zOffset
                     );
                     _v.applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
+                    
                     f.body.position.set(_v.x, _v.y, _v.z);
                     f.mesh.position.copy(f.body.position);
                 });
             });
 
-            // カメラの起動
             const video = document.getElementById('input_video');
-            const camHelper = new Camera(video, {
+            new Camera(video, {
                 onFrame: async () => { await hands.send({ image: video }); },
-                width: 1280, height: 720
-            });
-            camHelper.start();
+                facingMode: "environment", width: 1280, height: 720
+            }).start();
 
             renderer.setAnimationLoop(() => {
                 world.step(1/60);
