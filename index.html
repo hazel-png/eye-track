@@ -3,148 +3,109 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>WebXR Spatial Studio Pro</title>
+    <title>WebXR Life-size Hands</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
     <style>
-        :root { --accent: #4285F4; --bg: #ffffff; }
-        body { margin: 0; overflow: hidden; background: #000; font-family: 'Roboto', sans-serif; }
+        body { margin: 0; overflow: hidden; background: #000; }
         video { display: none; }
         #overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             display: flex; align-items: center; justify-content: center;
-            background: var(--bg); z-index: 2000; transition: opacity 0.5s ease-out;
+            background: #fff; z-index: 2000;
         }
-        .container { text-align: center; max-width: 400px; padding: 20px; }
-        .btn-primary {
-            background: var(--accent); color: white; border: none; padding: 12px 24px;
-            border-radius: 4px; font-size: 16px; cursor: pointer; font-weight: 500;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+        .btn {
+            background: #4285F4; color: white; border: none; padding: 15px 30px;
+            border-radius: 8px; font-size: 18px; font-weight: bold; cursor: pointer;
         }
     </style>
 </head>
 <body>
-    <div id="overlay">
-        <div class="container">
-            <h1 style="color:#5f6368; font-size:24px;">Spatial Studio</h1>
-            <p style="color:#70757a;">物理演算とハンドトラッキングを同期中...</p>
-            <button class="btn-primary" id="start-btn">今すぐ開始</button>
-        </div>
-    </div>
+    <div id="overlay"><button class="btn" id="start-btn">等身大モードで開始</button></div>
     <video id="input_video" playsinline></video>
 
     <script type="module">
         import { VRButton } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/webxr/VRButton.js';
 
-        // --- Configuration ---
-        const CONFIG = {
-            desk: { height: 1.5, z: -0.25, width: 1.0, depth: 0.5 },
-            finger: { radius: 0.028, opacity: 0.6 },
-            physics: { friction: 0.8, restitution: 0.1, gravity: -9.8 },
-            smoothing: 0.4 // トラッキングの平滑化係数
-        };
+        const SCALE_X = 2.0; // 左右の広がり（等身大調整）
+        const SCALE_Y = 1.2; // 上下の広がり
+        const OFFSET_Z = -0.4; // 手の前後位置の基準
 
-        let scene, camera, renderer, world;
+        let scene, camera, renderer, world, fingers = [];
         let cubeMesh, cubeBody;
-        const fingers = [];
-        // GC回避用の再利用ベクトル
         const _v = new THREE.Vector3();
 
-        function initPhysics() {
-            world = new CANNON.World();
-            world.gravity.set(0, CONFIG.physics.gravity, 0);
-            
-            // 高摩擦マテリアルの定義
-            const gripMaterial = new CANNON.Material("grip");
-            const contact = new CANNON.ContactMaterial(gripMaterial, gripMaterial, {
-                friction: CONFIG.physics.friction,
-                restitution: CONFIG.physics.restitution,
-                contactEquationStiffness: 1e7
-            });
-            world.addContactMaterial(contact);
-            return gripMaterial;
-        }
+        async function init() {
+            document.getElementById('overlay').remove();
 
-        async function setupApp() {
-            document.getElementById('overlay').style.opacity = '0';
-            setTimeout(() => document.getElementById('overlay').remove(), 500);
-
-            // Renderer Setup
             scene = new THREE.Scene();
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
+            
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-            renderer.setPixelRatio(window.devicePixelRatio);
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
             document.body.appendChild(VRButton.createButton(renderer));
 
-            const mat = initPhysics();
+            // Physics
+            world = new CANNON.World();
+            world.gravity.set(0, -9.8, 0);
+            const mat = new CANNON.Material();
+            world.addContactMaterial(new CANNON.ContactMaterial(mat, mat, { friction: 0.9, restitution: 0.1 }));
 
-            // Lighting
-            scene.add(new THREE.AmbientLight(0xffffff, 0.8));
-            const sun = new THREE.DirectionalLight(0xffffff, 0.5);
-            sun.position.set(5, 10, 5);
-            scene.add(sun);
-
-            // Workspace (Desk)
-            const deskGeo = new THREE.BoxGeometry(CONFIG.desk.width, 0.05, CONFIG.desk.depth);
-            const deskMesh = new THREE.Mesh(deskGeo, new THREE.MeshStandardMaterial({ color: 0xf8f9fa }));
-            deskMesh.position.set(0, CONFIG.desk.height, CONFIG.desk.z);
+            // Desk (Face height: 1.5m)
+            const deskMesh = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.05, 0.6), new THREE.MeshStandardMaterial({ color: 0xcccccc }));
+            deskMesh.position.set(0, 1.5, -0.3);
             scene.add(deskMesh);
-
             const deskBody = new CANNON.Body({ mass: 0, material: mat });
-            deskBody.addShape(new CANNON.Box(new CANNON.Vec3(CONFIG.desk.width/2, 0.025, CONFIG.desk.depth/2)));
+            deskBody.addShape(new CANNON.Box(new CANNON.Vec3(0.6, 0.025, 0.3)));
             deskBody.position.copy(deskMesh.position);
             world.addBody(deskBody);
 
-            // Target (Cube)
-            cubeMesh = new THREE.Mesh(
-                new THREE.BoxGeometry(0.12, 0.12, 0.12),
-                new THREE.MeshStandardMaterial({ color: CONFIG.accent, roughness: 0.5 })
-            );
+            // Cube
+            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.1), new THREE.MeshStandardMaterial({ color: 0x4285F4 }));
             scene.add(cubeMesh);
-            cubeBody = new CANNON.Body({ mass: 0.5, material: mat });
-            cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.06, 0.06, 0.06)));
-            cubeBody.position.set(0, CONFIG.desk.height + 0.2, CONFIG.desk.z);
+            cubeBody = new CANNON.Body({ mass: 0.3, material: mat });
+            cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.05, 0.05, 0.05)));
+            cubeBody.position.set(0, 1.7, -0.3);
             world.addBody(cubeBody);
 
-            // Fingers
-            const fingerGeo = new THREE.SphereGeometry(CONFIG.finger.radius, 12, 12);
+            scene.add(new THREE.AmbientLight(0xffffff, 1.0));
+
+            // Life-size Fingers (Approx. 2cm radius)
+            const fingerGeo = new THREE.SphereGeometry(0.02, 16, 16);
             for (let i = 0; i < 21; i++) {
-                const mesh = new THREE.Mesh(fingerGeo, new THREE.MeshBasicMaterial({ 
-                    color: 0xffffff, transparent: true, opacity: CONFIG.finger.opacity 
-                }));
+                const mesh = new THREE.Mesh(fingerGeo, new THREE.MeshBasicMaterial({ color: 0xffffff }));
                 scene.add(mesh);
                 const body = new CANNON.Body({ mass: 0, material: mat });
-                body.addShape(new CANNON.Sphere(CONFIG.finger.radius));
+                body.addShape(new CANNON.Sphere(0.02));
                 world.addBody(body);
                 fingers.push({ mesh, body });
             }
 
-            setupTracking();
-        }
-
-        function setupTracking() {
+            // MediaPipe & Camera
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
             hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.8, minTrackingConfidence: 0.8 });
-
+            
             hands.onResults((results) => {
                 if (!results.multiHandLandmarks?.length) return;
                 const xrCamera = renderer.xr.getCamera(camera);
-                const landmarks = results.multiHandLandmarks[0];
+                const lm = results.multiHandLandmarks[0];
 
-                landmarks.forEach((point, i) => {
-                    const f = fingers[i];
-                    // 座標変換の最適化
-                    _v.set((point.x - 0.5) * 1.6, -(point.y - 0.5) * 1.6, -point.z * 1.6 - 0.3);
+                lm.forEach((point, i) => {
+                    // 等身大にするための計算: 
+                    // 画面中央(0.5)からの距離をメートルに換算
+                    _v.set(
+                        (point.x - 0.5) * SCALE_X, 
+                        -(point.y - 0.5) * SCALE_Y, 
+                        -point.z * 1.0 + OFFSET_Z 
+                    );
                     _v.applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
                     
-                    // 指の移動を少しだけ補完（カクつき防止）
-                    f.body.position.lerp(new CANNON.Vec3(_v.x, _v.y, _v.z), CONFIG.smoothing, f.body.position);
-                    f.mesh.position.copy(f.body.position);
+                    fingers[i].body.position.set(_v.x, _v.y, _v.z);
+                    fingers[i].mesh.position.copy(fingers[i].body.position);
                 });
             });
 
@@ -154,17 +115,15 @@
                 facingMode: "environment", width: 1280, height: 720
             }).start();
 
-            renderer.setAnimationLoop(render);
+            renderer.setAnimationLoop(() => {
+                world.step(1/60);
+                cubeMesh.position.copy(cubeBody.position);
+                cubeMesh.quaternion.copy(cubeBody.quaternion);
+                renderer.render(scene, camera);
+            });
         }
 
-        function render() {
-            world.step(1/60);
-            cubeMesh.position.copy(cubeBody.position);
-            cubeMesh.quaternion.copy(cubeBody.quaternion);
-            renderer.render(scene, camera);
-        }
-
-        document.getElementById('start-btn').addEventListener('click', () => setupApp());
+        document.getElementById('start-btn').addEventListener('click', init);
     </script>
 </body>
 </html>
