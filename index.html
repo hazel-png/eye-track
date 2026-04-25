@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Auto-Start Physics VR</title>
+    <title>Lightweight Physics VR</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
@@ -10,101 +10,96 @@
     <style>
         body { margin: 0; overflow: hidden; background: #000; }
         video { display: none; }
-        #loading {
-            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            color: white; font-family: sans-serif; z-index: 1000;
-        }
+        #msg { position: fixed; top: 10px; left: 10px; color: #0f0; font-family: monospace; z-index: 10; pointer-events: none; }
     </style>
 </head>
 <body>
-    <div id="loading">カメラ起動中... 手をかざしてください</div>
+    <div id="msg">Initializing...</div>
     <video id="input_video"></video>
 
     <script>
         let scene, camera, renderer, world, cubeMesh, cubeBody;
-        const jointMeshes = [], jointBodies = [];
+        const tipMeshes = [], tipBodies = []; // 親指と人差し指のみ
 
         async function init() {
-            // --- 1. Three.js 初期化 ---
+            // --- Three.js 軽量設定 ---
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x050505);
-            scene.add(new THREE.GridHelper(20, 20, 0x444444, 0x222222));
+            scene.add(new THREE.GridHelper(10, 10, 0x333333, 0x222222));
 
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 100);
             camera.position.set(0, 1.6, 0);
 
-            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer = new THREE.WebGLRenderer({ antialias: false }); // アンチエイリアスOFFで軽量化
+            renderer.setPixelRatio(window.devicePixelRatio > 1 ? 1 : 1); // ピクセル比を抑える
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
 
-            const light = new THREE.DirectionalLight(0xffffff, 1);
-            light.position.set(1, 2, 1);
+            scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+            const light = new THREE.PointLight(0xffffff, 1);
+            light.position.set(0, 2, 1);
             scene.add(light);
-            scene.add(new THREE.AmbientLight(0x404040));
 
-            // --- 2. Cannon.js 物理初期化 ---
+            // --- Cannon.js 物理軽量設定 ---
             world = new CANNON.World();
-            world.gravity.set(0, -9.82, 0);
+            world.gravity.set(0, -9.8, 0);
+            world.broadphase = new CANNON.NaiveBroadphase(); // シンプルな衝突判定
+            world.solver.iterations = 5; // 計算回数を減らして高速化
 
-            const material = new CANNON.Material({ friction: 1.0, restitution: 0 });
+            const pMat = new CANNON.Material({ friction: 2.0 });
 
-            // 3Dオブジェクト（キューブ）
-            const size = 0.1;
-            cubeMesh = new THREE.Mesh(
-                new THREE.BoxGeometry(size*2, size*2, size*2),
-                new THREE.MeshStandardMaterial({ color: 0x00ffaa })
-            );
+            // キューブ
+            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.15, 0.15), new THREE.MeshPhongMaterial({ color: 0x00ffaa }));
             scene.add(cubeMesh);
-
-            cubeBody = new CANNON.Body({ mass: 0.2, material: material });
-            cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(size, size, size)));
-            cubeBody.position.set(0, 1.5, -0.5);
-            cubeBody.angularDamping = 0.5;
+            cubeBody = new CANNON.Body({ mass: 0.1, material: pMat });
+            cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.075, 0.075, 0.075)));
+            cubeBody.position.set(0, 1.5, -0.4);
             world.addBody(cubeBody);
 
-            // 指の関節（21個）
-            const jGeo = new THREE.SphereGeometry(0.02, 8, 8);
-            const jMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-            for (let i = 0; i < 21; i++) {
-                const mesh = new THREE.Mesh(jGeo, jMat);
+            // 操作用の指先（親指=4, 人差し指=8 の2点のみ物理化）
+            const jGeo = new THREE.SphereGeometry(0.02, 6, 6);
+            for (let i = 0; i < 2; i++) {
+                const mesh = new THREE.Mesh(jGeo, new THREE.MeshBasicMaterial({ color: 0xffffff }));
                 scene.add(mesh);
-                jointMeshes.push(mesh);
+                tipMeshes.push(mesh);
 
-                const body = new CANNON.Body({ mass: 0, material: material });
+                const body = new CANNON.Body({ mass: 0, material: pMat });
                 body.addShape(new CANNON.Sphere(0.02));
                 world.addBody(body);
-                jointBodies.push(body);
+                tipBodies.push(body);
             }
 
-            // 摩擦設定
-            const contact = new CANNON.ContactMaterial(material, material, { friction: 2.0, restitution: 0 });
-            world.addContactMaterial(contact);
-
-            // --- 3. MediaPipe 初期化 ---
+            // --- MediaPipe 最軽量設定 ---
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
-            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.8, minTrackingConfidence: 0.8 });
+            hands.setOptions({ 
+                maxNumHands: 1, 
+                modelComplexity: 0, // 0 = 最速モデル
+                minDetectionConfidence: 0.6, 
+                minTrackingConfidence: 0.6 
+            });
 
             hands.onResults((results) => {
-                document.getElementById('loading').style.display = 'none';
+                document.getElementById('msg').style.display = 'none';
                 if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
                     const lm = results.multiHandLandmarks[0];
-                    lm.forEach((point, i) => {
+                    const targets = [lm[4], lm[8]]; // 親指と人差し指の先端
+                    
+                    targets.forEach((point, i) => {
                         const v = new THREE.Vector3(
-                            (point.x - 0.5) * 1.5, 
-                            -(point.y - 0.5) * 1.2, 
-                            -point.z * 3 - 0.5
+                            (point.x - 0.5) * 1.4, 
+                            -(point.y - 0.5) * 1.0, 
+                            -point.z * 2 - 0.4
                         ).applyQuaternion(camera.quaternion).add(camera.position);
 
-                        jointBodies[i].position.copy(v);
-                        jointMeshes[i].position.copy(v);
+                        tipBodies[i].position.copy(v);
+                        tipMeshes[i].position.copy(v);
                     });
                 }
             });
 
-            const videoElement = document.getElementById('input_video');
-            const cam = new Camera(videoElement, {
-                onFrame: async () => { await hands.send({ image: videoElement }); },
-                width: 640, height: 480, facingMode: "environment"
+            const cam = new Camera(document.getElementById('input_video'), {
+                onFrame: async () => { await hands.send({ image: document.getElementById('input_video') }); },
+                width: 480, height: 270 // 解像度を下げて転送負荷を軽減
             });
             cam.start();
 
@@ -113,7 +108,7 @@
 
         function animate() {
             requestAnimationFrame(animate);
-            world.step(1/60);
+            world.step(1/30); // 物理ステップを落として負荷軽減
             cubeMesh.position.copy(cubeBody.position);
             cubeMesh.quaternion.copy(cubeBody.quaternion);
 
@@ -123,13 +118,7 @@
             renderer.setScissor(w/2, 0, w/2, h); renderer.setViewport(w/2, 0, w/2, h); renderer.render(scene, camera);
         }
 
-        // ページ読み込み時に自動開始（iOS等の場合は一度画面タップが必要な場合があります）
-        window.onload = () => {
-            init().catch(err => {
-                console.error(err);
-                document.getElementById('loading').innerHTML = "エラー: カメラを許可してください";
-            });
-        };
+        window.onload = () => init();
     </script>
 </body>
 </html>
