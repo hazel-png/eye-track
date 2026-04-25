@@ -3,35 +3,40 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>WebXR Spatial Studio - Real World Sync</title>
+    <title>WebXR Spatial Studio - Camera Background</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
     <style>
-        body { margin: 0; overflow: hidden; background: transparent; font-family: sans-serif; }
-        video { display: none; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
+        
+        /* カメラ映像を全画面で背面に配置 */
+        #input_video {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            object-fit: cover; z-index: -1; transform: scaleX(1); /* 背面カメラなら反転不要 */
+        }
+
         #start-overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             display: flex; flex-direction: column; align-items: center; justify-content: center;
             background: white; z-index: 2000;
         }
         .btn {
-            background: #4285F4; color: white; border: none; padding: 15px 30px;
-            border-radius: 8px; font-size: 18px; cursor: pointer;
+            background: #4285F4; color: white; border: none; padding: 20px 40px;
+            border-radius: 50px; font-size: 20px; font-weight: bold; cursor: pointer;
         }
     </style>
 </head>
 <body>
     <div id="start-overlay">
-        <h1 style="color: #333; margin-bottom: 20px;">6DoF 実写同期モード</h1>
-        <button class="btn" id="start-btn">ARを開始</button>
+        <button class="btn" id="start-btn">実写背景モードで開始</button>
     </div>
+    
     <video id="input_video" playsinline></video>
 
     <script type="module">
-        // ARButtonをインポート
-        import { ARButton } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/webxr/ARButton.js';
+        import { VRButton } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/webxr/VRButton.js';
 
         const SCALE_CONFIG = {
             handSpread: 1.15,
@@ -48,37 +53,34 @@
         async function init() {
             document.getElementById('start-overlay').remove();
 
+            // --- Three.js Setup ---
             scene = new THREE.Scene();
-            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
-
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+            
+            // alpha: true にすることで、3Dがない部分に背景（ビデオ）が見えるようになる
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setClearColor(0x000000, 0); // 背景を透明に設定
             renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.xr.enabled = true; // WebXRを有効化
+            renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
-
-            // AR開始ボタンの設置（immersive-arを指定）
-            document.body.appendChild(ARButton.createButton(renderer, { 
-                requiredFeatures: ['local-floor'] 
-            }));
+            document.body.appendChild(VRButton.createButton(renderer));
 
             // --- Physics ---
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
             const mat = new CANNON.Material();
-            world.addContactMaterial(new CANNON.ContactMaterial(mat, mat, { friction: 0.7, restitution: 0.1 }));
 
-            // Desk (ARなので、少し透明に)
-            const deskHeight = 1.0; 
+            // Desk (半透明にしてビデオが見えるようにする)
+            const deskHeight = 1.3;
             const deskMesh = new THREE.Mesh(
-                new THREE.BoxGeometry(0.8, 0.02, 0.4), 
+                new THREE.BoxGeometry(1.0, 0.05, 0.5), 
                 new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.3 })
             );
-            deskMesh.position.set(0, deskHeight, -0.5);
+            deskMesh.position.set(0, deskHeight, -0.4);
             scene.add(deskMesh);
 
-            const deskBody = new CANNON.Body({ mass: 0, material: mat });
-            deskBody.addShape(new CANNON.Box(new CANNON.Vec3(0.4, 0.01, 0.2)));
+            const deskBody = new CANNON.Body({ mass: 0 });
+            deskBody.addShape(new CANNON.Box(new CANNON.Vec3(0.5, 0.025, 0.25)));
             deskBody.position.copy(deskMesh.position);
             world.addBody(deskBody);
 
@@ -87,15 +89,12 @@
             scene.add(cubeMesh);
             cubeBody = new CANNON.Body({ mass: 0.3, material: mat });
             cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.05, 0.05, 0.05)));
-            cubeBody.position.set(0, deskHeight + 0.5, -0.5);
+            cubeBody.position.set(0, deskHeight + 0.5, -0.4);
             world.addBody(cubeBody);
 
             // Fingers
             for (let i = 0; i < 21; i++) {
-                const mesh = new THREE.Mesh(
-                    new THREE.SphereGeometry(SCALE_CONFIG.fingerRadius), 
-                    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 })
-                );
+                const mesh = new THREE.Mesh(new THREE.SphereGeometry(SCALE_CONFIG.fingerRadius), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 }));
                 scene.add(mesh);
                 const body = new CANNON.Body({ mass: 0 });
                 body.addShape(new CANNON.Sphere(SCALE_CONFIG.fingerRadius));
@@ -112,7 +111,9 @@
             hands.onResults((results) => {
                 if (!results.multiHandLandmarks?.length) return;
                 const xrCamera = renderer.xr.getCamera(camera);
-                results.multiHandLandmarks[0].forEach((point, i) => {
+                const landmarks = results.multiHandLandmarks[0];
+
+                landmarks.forEach((point, i) => {
                     const f = fingers[i];
                     _v.set(
                         (point.x - 0.5) * SCALE_CONFIG.handSpread, 
@@ -125,14 +126,14 @@
                 });
             });
 
+            // カメラの起動
             const video = document.getElementById('input_video');
-            const cameraHelper = new Camera(video, {
+            const camHelper = new Camera(video, {
                 onFrame: async () => { await hands.send({ image: video }); },
                 width: 1280, height: 720
             });
-            cameraHelper.start();
+            camHelper.start();
 
-            // Render Loop
             renderer.setAnimationLoop(() => {
                 world.step(1/60);
                 cubeMesh.position.copy(cubeBody.position);
