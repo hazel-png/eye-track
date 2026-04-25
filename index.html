@@ -3,119 +3,104 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Real World AR Studio</title>
+    <title>Fixed AR Spatial Studio</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <style>
-        body { margin: 0; overflow: hidden; background: transparent; }
-        #overlay {
+        body { margin: 0; overflow: hidden; background-color: transparent; }
+        #ui-layer {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             display: flex; align-items: center; justify-content: center;
-            background: rgba(0,0,0,0.7); z-index: 2000; color: white; text-align: center;
+            z-index: 10; pointer-events: none;
         }
         .start-btn {
-            background: #4285F4; color: white; border: none; padding: 20px 40px;
-            border-radius: 50px; font-size: 20px; font-weight: bold; cursor: pointer;
+            padding: 20px 40px; font-size: 18px; background: #4285F4;
+            color: white; border: none; border-radius: 30px;
+            pointer-events: auto; cursor: pointer; box-shadow: 0 4px 15px rgba(0,0,0,0.3);
         }
     </style>
 </head>
 <body>
-    <div id="overlay">
-        <div>
-            <h1>Spatial Studio AR</h1>
-            <p>カメラで現実を映しながら開始します</p>
-            <button class="start-btn" id="ar-start">ARを開始</button>
-        </div>
+    <div id="ui-layer">
+        <button class="start-btn" id="start-ar-btn">ARを開始（現実を映す）</button>
     </div>
 
     <script type="module">
-        import { ARButton } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/webxr/ARButton.js';
-
         let scene, camera, renderer, world, cubeMesh, cubeBody;
         const fingers = [];
-        const _v = new THREE.Vector3();
 
-        async function startAR() {
-            const overlay = document.getElementById('overlay');
-            overlay.style.display = 'none';
+        async function activateAR() {
+            // UIを隠す
+            document.getElementById('ui-layer').style.display = 'none';
 
-            // --- Scene Setup ---
+            // --- 1. Scene & Camera ---
             scene = new THREE.Scene();
             camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
 
-            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            // --- 2. Renderer (ここが重要) ---
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
             renderer.setPixelRatio(window.devicePixelRatio);
             renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.xr.enabled = true; // WebXRを有効化
+            renderer.xr.enabled = true;
+            renderer.setClearAlpha(0); // 背景を完全に透明に
             document.body.appendChild(renderer.domElement);
 
-            // 背景を透明にする（現実が見えるように）
-            renderer.setClearColor(0x000000, 0);
+            // --- 3. Light ---
+            const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
+            scene.add(light);
 
-            // --- Physics Setup ---
+            // --- 4. Physics ---
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
-            const physicsMat = new CANNON.Material();
-            world.addContactMaterial(new CANNON.ContactMaterial(physicsMat, physicsMat, { friction: 0.8, restitution: 0.1 }));
 
-            // --- 仮想オブジェクトの配置 ---
-            const deskH = 1.5; // 顔の高さ
-            const deskZ = -0.5; // 50cm前
-
-            // 机 (少し半透明にして現実と馴染ませる)
-            const deskGeo = new THREE.BoxGeometry(0.8, 0.02, 0.4);
-            const deskMat = new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 });
-            const deskMesh = new THREE.Mesh(deskGeo, deskMat);
-            deskMesh.position.set(0, deskH, deskZ);
+            // --- 5. Virtual Objects (顔の高さに配置) ---
+            const deskH = 1.4; // 1.4m (顔の高さ付近)
+            
+            // 机
+            const deskMesh = new THREE.Mesh(
+                new THREE.BoxGeometry(0.6, 0.02, 0.3),
+                new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.7 })
+            );
+            deskMesh.position.set(0, deskH, -0.5);
             scene.add(deskMesh);
 
-            const deskBody = new CANNON.Body({ mass: 0, material: physicsMat });
-            deskBody.addShape(new CANNON.Box(new CANNON.Vec3(0.4, 0.01, 0.2)));
+            const deskBody = new CANNON.Body({ mass: 0 });
+            deskBody.addShape(new CANNON.Box(new CANNON.Vec3(0.3, 0.01, 0.15)));
             deskBody.position.copy(deskMesh.position);
             world.addBody(deskBody);
 
             // キューブ
-            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.1), new THREE.MeshStandardMaterial({ color: 0x4285F4 }));
+            cubeMesh = new THREE.Mesh(
+                new THREE.BoxGeometry(0.1, 0.1, 0.1),
+                new THREE.MeshStandardMaterial({ color: 0x4285F4 })
+            );
             scene.add(cubeMesh);
-            cubeBody = new CANNON.Body({ mass: 0.3, material: physicsMat });
+            cubeBody = new CANNON.Body({ mass: 0.5 });
             cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.05, 0.05, 0.05)));
-            cubeBody.position.set(0, deskH + 0.3, deskZ);
+            cubeBody.position.set(0, deskH + 0.5, -0.5);
             world.addBody(cubeBody);
 
-            // 指 (等身大)
-            for (let i = 0; i < 21; i++) {
-                const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.015), new THREE.MeshBasicMaterial({ color: 0xffffff }));
-                scene.add(mesh);
-                const body = new CANNON.Body({ mass: 0 });
-                body.addShape(new CANNON.Sphere(0.015));
-                world.addBody(body);
-                fingers.push({ mesh, body });
+            // --- 6. WebXR AR Session Start ---
+            const sessionInit = { requiredFeatures: ['local-floor'] };
+            try {
+                const session = await navigator.xr.requestSession('immersive-ar', sessionInit);
+                renderer.xr.setSession(session);
+            } catch (e) {
+                console.error("ARセッションの開始に失敗:", e);
+                alert("ARを開始できませんでした。HTTPS接続か、対応デバイスか確認してください。");
+                return;
             }
 
-            scene.add(new THREE.AmbientLight(0xffffff, 1.0));
-
-            // --- WebXR Session ---
-            const session = await navigator.xr.requestSession('immersive-ar', {
-                requiredFeatures: ['local-floor']
-            });
-            renderer.xr.setSession(session);
-
-            // --- Render Loop ---
-            renderer.setAnimationLoop((time, frame) => {
-                if (frame) {
-                    world.step(1/60);
-                    cubeMesh.position.copy(cubeBody.position);
-                    cubeMesh.quaternion.copy(cubeBody.quaternion);
-
-                    // ここにMediaPipeのハンドトラッキング処理を繋ぎ込むと、
-                    // 現実の風景の中で自分の手でキューブを触れます。
-                    renderer.render(scene, camera);
-                }
+            // --- 7. Main Loop ---
+            renderer.setAnimationLoop(() => {
+                world.step(1/60);
+                cubeMesh.position.copy(cubeBody.position);
+                cubeMesh.quaternion.copy(cubeBody.quaternion);
+                renderer.render(scene, camera);
             });
         }
 
-        document.getElementById('ar-start').addEventListener('click', startAR);
+        document.getElementById('start-ar-btn').addEventListener('click', activateAR);
     </script>
 </body>
 </html>
