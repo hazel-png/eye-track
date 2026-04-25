@@ -1,75 +1,148 @@
 <!DOCTYPE html>
-<html>
+<html lang="ja">
 <head>
     <meta charset="utf-8">
-    <title>WebXR Physics - Cannon.js</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>WebXR Physics Pro</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; }
+        :root {
+            --ios-bg: rgba(25, 25, 25, 0.7);
+            --ios-accent: #0A84FF;
+        }
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            background: #000; 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
         video { display: none; }
+
+        /* iPhone風オーバーレイUI */
+        #ios-ui {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            background: radial-gradient(circle at center, #2c3e50 0%, #000 100%);
+            z-index: 2000;
+            color: white;
+            transition: opacity 0.5s ease;
+        }
+
+        .glass-card {
+            background: var(--ios-bg);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-radius: 30px;
+            padding: 40px;
+            width: 80%;
+            max-width: 320px;
+            text-align: center;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+
+        h1 { font-weight: 600; font-size: 24px; margin-bottom: 10px; }
+        p { font-size: 14px; opacity: 0.8; margin-bottom: 30px; line-height: 1.5; }
+
+        .start-btn {
+            background: var(--ios-accent);
+            color: white;
+            border: none;
+            padding: 15px 40px;
+            border-radius: 25px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+            box-shadow: 0 4px 15px rgba(10, 132, 255, 0.3);
+        }
+
+        .start-btn:active { transform: scale(0.95); }
+
+        /* VRボタンのカスタムスタイル上書き */
+        #VRButton {
+            border-radius: 20px !important;
+            background: var(--ios-bg) !important;
+            backdrop-filter: blur(10px) !important;
+            border: 1px solid rgba(255,255,255,0.2) !important;
+            font-family: inherit !important;
+            bottom: 40px !important;
+        }
     </style>
 </head>
 <body>
+    <div id="ios-ui">
+        <div class="glass-card">
+            <h1>Spatial Physics</h1>
+            <p>背面カメラを使用してハンドトラッキングを開始します。物理オブジェクトに触れてみましょう。</p>
+            <button class="start-btn" id="start-btn">アクセスを許可</button>
+        </div>
+    </div>
+
     <video id="input_video" playsinline></video>
-    <div id="button_container"></div>
 
     <script type="module">
-        // WebXR用のVRボタンをインポート
         import { VRButton } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/webxr/VRButton.js';
 
         let scene, camera, renderer, world, cubeMesh, cubeBody;
         const tipMeshes = [], tipBodies = [];
 
         async function init() {
-            // --- Three.js Setup ---
+            // --- UIの非表示 ---
+            document.getElementById('ios-ui').style.opacity = '0';
+            setTimeout(() => document.getElementById('ios-ui').style.display = 'none', 500);
+
+            // --- Three.js ---
             scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x050505);
-
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
-            camera.position.set(0, 1.6, 3); 
-
+            
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
             renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.xr.enabled = true; // WebXRを有効化
+            renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
-            document.body.appendChild(VRButton.createButton(renderer));
+            
+            // VRボタン追加
+            const vrBtn = VRButton.createButton(renderer);
+            document.body.appendChild(vrBtn);
 
-            // ライティング
-            scene.add(new THREE.AmbientLight(0xffffff, 0.5));
-            const light = new THREE.DirectionalLight(0xffffff, 0.8);
-            light.position.set(1, 5, 1);
-            scene.add(light);
+            // 環境光
+            scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+            const sun = new THREE.PointLight(0xffffff, 1);
+            sun.position.set(2, 5, 2);
+            scene.add(sun);
 
-            // 地面（グリッド）
-            const grid = new THREE.GridHelper(20, 20, 0xffffff, 0x444444);
+            // 地面
+            const grid = new THREE.GridHelper(20, 40, 0x444444, 0x222222);
             scene.add(grid);
 
-            // --- Cannon.js (物理エンジン) ---
+            // --- Cannon.js ---
             world = new CANNON.World();
-            world.gravity.set(0, -9.8, 0);
-            const pMat = new CANNON.Material({ friction: 2.5 });
+            world.gravity.set(0, -9.82, 0);
 
-            // 物理的な地面
-            const groundBody = new CANNON.Body({ mass: 0, material: pMat });
+            const groundBody = new CANNON.Body({ mass: 0 });
             groundBody.addShape(new CANNON.Plane());
             groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
             world.addBody(groundBody);
 
-            // ターゲット（立方体）
-            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.2), new THREE.MeshStandardMaterial({ color: 0x00ffaa }));
+            cubeMesh = new THREE.Mesh(
+                new THREE.BoxGeometry(0.2, 0.2, 0.2), 
+                new THREE.MeshStandardMaterial({ color: 0x0A84FF, roughness: 0.1, metalness: 0.5 })
+            );
             scene.add(cubeMesh);
-            cubeBody = new CANNON.Body({ mass: 0.1, material: pMat });
+            cubeBody = new CANNON.Body({ mass: 0.5 });
             cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.1, 0.1, 0.1)));
-            cubeBody.position.set(0, 1.5, -0.5);
+            cubeBody.position.set(0, 2, -0.8);
             world.addBody(cubeBody);
 
-            // 手の関節代わりの球体 (21個)
-            const jGeo = new THREE.SphereGeometry(0.015, 8, 8);
+            // 関節
             for (let i = 0; i < 21; i++) {
-                const mesh = new THREE.Mesh(jGeo, new THREE.MeshBasicMaterial({ color: 0xffffff }));
+                const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.015), new THREE.MeshBasicMaterial({ color: 0xffffff }));
                 scene.add(mesh);
                 tipMeshes.push(mesh);
                 const body = new CANNON.Body({ mass: 0 });
@@ -78,24 +151,25 @@
                 tipBodies.push(body);
             }
 
-            // --- MediaPipe Hand Tracking ---
+            // --- MediaPipe + 背面カメラ ---
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
-            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
+            hands.setOptions({ 
+                maxNumHands: 1, 
+                modelComplexity: 1, 
+                minDetectionConfidence: 0.7, 
+                minTrackingConfidence: 0.7 
+            });
 
             hands.onResults((results) => {
                 if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
                     const lm = results.multiHandLandmarks[0];
-                    // VR内のカメラの姿勢を取得
                     const xrCamera = renderer.xr.getCamera(camera);
-                    
                     lm.forEach((point, i) => {
-                        // 座標をワールド空間に変換（カメラの向きに合わせる）
                         const v = new THREE.Vector3(
-                            (point.x - 0.5) * 1.5, 
-                            -(point.y - 0.5) * 1.5, 
-                            -point.z * 1.5 - 0.4
+                            (point.x - 0.5) * 2, 
+                            -(point.y - 0.5) * 2, 
+                            -point.z * 2 - 0.6
                         ).applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
-                        
                         tipBodies[i].position.copy(v);
                         tipMeshes[i].position.copy(v);
                     });
@@ -105,25 +179,28 @@
             const videoElement = document.getElementById('input_video');
             const cameraStream = new Camera(videoElement, {
                 onFrame: async () => { await hands.send({ image: videoElement }); },
-                width: 640, height: 480
+                // 背面カメラ(environment)を指定
+                facingMode: "environment",
+                width: 1280, height: 720
             });
             cameraStream.start();
 
-            // レンダリングループ（WebXRではこれを使用）
-            renderer.setAnimationLoop(render);
+            renderer.setAnimationLoop(() => {
+                world.step(1/60);
+                cubeMesh.position.copy(cubeBody.position);
+                cubeMesh.quaternion.copy(cubeBody.quaternion);
+                renderer.render(scene, camera);
+            });
         }
 
-        function render() {
-            world.step(1/60);
-            
-            // 物理エンジンの計算結果をMeshに反映
-            cubeMesh.position.copy(cubeBody.position);
-            cubeMesh.quaternion.copy(cubeBody.quaternion);
-
-            renderer.render(scene, camera);
-        }
-
-        init();
+        document.getElementById('start-btn').addEventListener('click', () => {
+            // iOSのセンサー・カメラ許可プロンプト対策
+            if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                DeviceOrientationEvent.requestPermission().then(init).catch(console.error);
+            } else {
+                init();
+            }
+        });
     </script>
 </body>
 </html>
