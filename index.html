@@ -3,157 +3,191 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Titan VR: Aspect Corrected Studio</title>
+    <title>VR Hand Tracker - Reach Calibration</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
         video { display: none; }
-        #overlay {
+        #vr-ui {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             display: flex; align-items: center; justify-content: center;
             background: #fff; z-index: 2000;
         }
-        .btn { background: #1a73e8; color: white; border: none; padding: 20px 50px; border-radius: 50px; font-size: 20px; cursor: pointer; }
+        .btn { background: #1a73e8; color: white; border: none; padding: 20px 40px; border-radius: 50px; font-size: 20px; cursor: pointer; }
     </style>
 </head>
 <body>
-    <div id="overlay"><button class="btn" id="start-btn">START VR SESSION</button></div>
+    <div id="vr-ui">
+        <button class="btn" id="start-btn">Confirm Camera & Start VR</button>
+    </div>
     <video id="input_video" playsinline></video>
 
     <script type="module">
         import { VRButton } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/webxr/VRButton.js';
 
-        let scene, camera, renderer, world, cubeMesh, cubeBody, deskGroup;
+        let scene, camera, renderer, world, cubeMesh, cubeBody, deskGroup, videoTexture;
         let calibRing, isCalibrated = false;
-        let calibFrames = 0, maxReachZ = 1.0; 
+        let calibCount = 0;
+        let maxReachZ = 0;
+        let instructionText;
 
-        const CONFIG = {
-            handSpread: 1.6,
-            handVertical: 1.6,
-            zOffset: -0.3,
-            smoothing: 0.15,
-            maxArmLength: 0.7,
-            handDepth: 4.5
-        };
-
+        const SCALE_CONFIG = { handSpread: 1.5, handVertical: 1.5, handDepth: 3.5, zOffset: -0.2, fingerRadius: 0.015 };
         const fingers = [];
+        const _v = new THREE.Vector3();
         const dt = 1/60;
 
+        function createTextCanvas(text) {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = 512;
+            canvas.height = 128;
+            ctx.fillStyle = 'white';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.font = 'bold 32px sans-serif';
+            ctx.fillStyle = 'black';
+            ctx.textAlign = 'center';
+            ctx.fillText(text, 256, 70);
+            const texture = new THREE.CanvasTexture(canvas);
+            return texture;
+        }
+
         async function init() {
-            document.getElementById('overlay').remove();
-            const video = document.getElementById('input_video');
+            document.getElementById('vr-ui').style.display = 'none';
 
             scene = new THREE.Scene();
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.01, 100);
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
             document.body.appendChild(VRButton.createButton(renderer));
 
+            // --- Correct Aspect Ratio Monitor ---
+            const video = document.getElementById('input_video');
+            videoTexture = new THREE.VideoTexture(video);
+            
+            // Get actual video aspect ratio
+            const videoAspect = video.videoWidth / video.videoHeight || 16/9;
+            const monitorHeight = 0.25;
+            const monitorGeo = new THREE.PlaneGeometry(monitorHeight * videoAspect, monitorHeight);
+            const monitorMat = new THREE.MeshBasicMaterial({ map: videoTexture });
+            const monitor = new THREE.Mesh(monitorGeo, monitorMat);
+            monitor.position.set(0, 0.8, -0.6);
+            scene.add(monitor);
+
+            // Instructions Overlay
+            const instrGeo = new THREE.PlaneGeometry(0.4, 0.1);
+            const instrMat = new THREE.MeshBasicMaterial({ map: createTextCanvas("Extend arm fully to calibrate"), transparent: true });
+            instructionText = new THREE.Mesh(instrGeo, instrMat);
+            instructionText.position.set(0, 1.0, -0.6);
+            scene.add(instructionText);
+
+            // Physics
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
+            const handMat = new CANNON.Material();
+            const objectMat = new CANNON.Material();
+            world.addContactMaterial(new CANNON.ContactMaterial(handMat, objectMat, { friction: 1.0, restitution: 0.1 }));
 
-            // Assets
-            const ringGeo = new THREE.TorusGeometry(0.15, 0.01, 16, 100);
-            calibRing = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0x4285F4 }));
-            calibRing.position.set(0, 1.3, -0.6); 
+            // Calibration Ring
+            calibRing = new THREE.Mesh(
+                new THREE.TorusGeometry(0.08, 0.008, 16, 100),
+                new THREE.MeshBasicMaterial({ color: 0x1a73e8 })
+            );
+            calibRing.position.set(0, 0.8, -0.59); 
             scene.add(calibRing);
 
+            // Desk & Cube
             deskGroup = new THREE.Group();
-            const desk = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.05, 0.8), new THREE.MeshStandardMaterial());
-            desk.position.set(0, 0.9, -0.6);
-            deskGroup.add(desk);
+            const deskMesh = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.05, 0.6), new THREE.MeshStandardMaterial({ color: 0x888888 }));
+            deskMesh.position.set(0, 0.7, -0.5);
+            deskGroup.add(deskMesh);
             scene.add(deskGroup);
             deskGroup.visible = false;
 
-            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.08), new THREE.MeshStandardMaterial({ color: 0x1a73e8 }));
+            const deskBody = new CANNON.Body({ mass: 0, material: objectMat });
+            deskBody.addShape(new CANNON.Box(new CANNON.Vec3(0.6, 0.025, 0.3)));
+            deskBody.position.set(0, 0.7, -0.5);
+            world.addBody(deskBody);
+
+            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.08), new THREE.MeshStandardMaterial({ color: 0x4285F4 }));
             scene.add(cubeMesh);
             cubeMesh.visible = false;
-
-            cubeBody = new CANNON.Body({ mass: 0.5 });
+            cubeBody = new CANNON.Body({ mass: 0.2, material: objectMat });
             cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.04, 0.04, 0.04)));
-            cubeBody.position.set(0, 1.2, -0.6);
+            cubeBody.position.set(0, 1.0, -0.5);
             world.addBody(cubeBody);
 
+            // Fingers
+            const fingerMat = new THREE.MeshStandardMaterial({ color: 0x39ff14 });
             for (let i = 0; i < 21; i++) {
-                const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.015, 16, 16), new THREE.MeshStandardMaterial({ color: 0x39ff14 }));
+                const mesh = new THREE.Mesh(new THREE.SphereGeometry(SCALE_CONFIG.fingerRadius, 16, 16), fingerMat);
                 scene.add(mesh);
-                const body = new CANNON.Body({ mass: 0, type: CANNON.Body.KINEMATIC });
-                body.addShape(new CANNON.Sphere(0.015));
+                const body = new CANNON.Body({ mass: 0, material: handMat, type: CANNON.Body.KINEMATIC });
+                body.addShape(new CANNON.Sphere(SCALE_CONFIG.fingerRadius));
                 world.addBody(body);
-                fingers.push({ mesh, body, lastPos: new THREE.Vector3() });
+                fingers.push({ mesh, body });
             }
 
             scene.add(new THREE.AmbientLight(0xffffff, 1.0));
 
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
-            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.8, minTrackingConfidence: 0.8 });
+            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
 
             hands.onResults((results) => {
                 if (!results.multiHandLandmarks?.length) return;
                 
-                // --- ASPECT RATIO CORRECTION ---
-                const videoWidth = video.videoWidth;
-                const videoHeight = video.videoHeight;
-                const videoAspect = videoWidth / videoHeight;
-                const screenAspect = window.innerWidth / window.innerHeight;
-                
-                // Correction factor to prevent stretching
-                let xMultiplier = 1;
-                let yMultiplier = 1;
-                if (videoAspect > screenAspect) {
-                    xMultiplier = videoAspect / screenAspect;
-                } else {
-                    yMultiplier = screenAspect / videoAspect;
-                }
-
                 const landmarks = results.multiHandLandmarks[0];
                 const wrist = landmarks[0];
                 const xrCamera = renderer.xr.getCamera(camera);
 
                 if (!isCalibrated && renderer.xr.isPresenting) {
-                    if (Math.abs(wrist.x - 0.5) < 0.2 && Math.abs(wrist.y - 0.5) < 0.2) {
-                        calibFrames++;
-                        if (wrist.z < maxReachZ) maxReachZ = wrist.z;
-                        if (calibFrames > 90) {
-                            CONFIG.handDepth = CONFIG.maxArmLength / Math.abs(maxReachZ || 0.1);
+                    // Check if hand is roughly centered in camera view
+                    const inTarget = Math.abs(wrist.x - 0.5) < 0.25 && Math.abs(wrist.y - 0.5) < 0.25;
+                    
+                    if (inTarget) {
+                        calibCount++;
+                        // Capture the furthest Z (closest to camera, largest absolute value in Mediapipe)
+                        maxReachZ = Math.max(maxReachZ, Math.abs(wrist.z));
+                        
+                        const progress = Math.min(calibCount / 60, 1);
+                        calibRing.material.color.lerpColors(new THREE.Color(0x1a73e8), new THREE.Color(0x39ff14), progress);
+                        
+                        if (calibCount > 60) {
+                            // Normalize: set reach to roughly 0.7m (arm length) based on maxReachZ
+                            SCALE_CONFIG.handDepth = 0.7 / (maxReachZ || 0.1);
                             isCalibrated = true;
                             calibRing.visible = false;
+                            monitor.visible = false;
+                            instructionText.visible = false;
                             deskGroup.visible = true;
                             cubeMesh.visible = true;
                         }
+                    } else {
+                        calibCount = 0;
+                        calibRing.material.color.set(0x1a73e8);
                     }
                 }
 
-                const wristDepth = (wrist.z / maxReachZ) * -CONFIG.maxArmLength + CONFIG.zOffset;
-                const wristWorld = new THREE.Vector3(
-                    (wrist.x - 0.5) * CONFIG.handSpread * xMultiplier,
-                    -(wrist.y - 0.5) * CONFIG.handVertical * yMultiplier,
-                    wristDepth
-                ).applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
-
                 landmarks.forEach((point, i) => {
                     const f = fingers[i];
-                    const relX = (point.x - wrist.x) * CONFIG.handSpread * xMultiplier;
-                    const relY = -(point.y - wrist.y) * CONFIG.handVertical * yMultiplier;
-                    const relZ = -(point.z - wrist.z) * CONFIG.handDepth;
-
-                    const offset = new THREE.Vector3(relX, relY, relZ).applyQuaternion(xrCamera.quaternion);
-                    const targetPos = new THREE.Vector3().copy(wristWorld).add(offset);
-
-                    f.lastPos.lerp(targetPos, CONFIG.smoothing);
-                    f.body.position.copy(f.lastPos);
-                    f.mesh.position.copy(f.lastPos);
+                    _v.set(
+                        (point.x - 0.5) * SCALE_CONFIG.handSpread, 
+                        -(point.y - 0.5) * SCALE_CONFIG.handVertical, 
+                        -point.z * SCALE_CONFIG.handDepth + SCALE_CONFIG.zOffset
+                    );
+                    _v.applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
+                    f.body.position.copy(new CANNON.Vec3(_v.x, _v.y, _v.z));
+                    f.mesh.position.copy(f.body.position);
                 });
             });
 
             new Camera(video, {
                 onFrame: async () => { await hands.send({ image: video }); },
-                facingMode: "environment", width: 1280, height: 720
+                width: 1280, height: 720
             }).start();
 
             renderer.setAnimationLoop(() => {
