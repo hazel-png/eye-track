@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>WebXR Spatial Studio - Fixed Aspect</title>
+    <title>WebXR Spatial Studio - Grab Cube</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
@@ -24,43 +24,44 @@
 </head>
 <body>
     <div id="start-overlay">
-        <button class="btn" id="start-btn">等身大モードで開始</button>
+        <button class="btn" id="start-btn">ゲームを開始</button>
     </div>
     <video id="input_video" playsinline></video>
 
     <script type="module">
         import { VRButton } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/webxr/VRButton.js';
 
+        // --- 設定値 ---
         const SCALE_CONFIG = {
-            handSpread: 1.2,
-            handVertical: 1.2,
+            handSpread: 1.3,
+            handVertical: 1.3,
             handDepth: 1.5,
-            zOffset: -0.5,
-            fingerRadius: 0.015
+            zOffset: -0.6, // 少し遠くに配置
+            fingerRadius: 0.012,
+            pinchThreshold: 0.04, // つまんだと判定する距離(m)
+            grabRange: 0.06 // キューブと指の距離(m)
         };
 
-        let scene, camera, renderer, world, cubeMesh, cubeBody, videoTexture;
+        let scene, camera, renderer, world, cubeMesh, cubeBody, videoTexture, deskMesh;
         const fingers = [];
         const _v = new THREE.Vector3();
         const video = document.getElementById('input_video');
 
-        // 背景映像の比率を補正する関数
+        // Grab state
+        let currentConstraint = null;
+        let isPinching = false;
+
         function updateBackgroundScaling() {
             if (!videoTexture || video.videoWidth === 0) return;
-
             const videoAspect = video.videoWidth / video.videoHeight;
             const canvasAspect = window.innerWidth / window.innerHeight;
-
             videoTexture.matrixAutoUpdate = false;
             videoTexture.matrix.identity();
-
             if (videoAspect > canvasAspect) {
-                // ビデオが画面より横長な場合：左右をカット
                 const scale = canvasAspect / videoAspect;
                 videoTexture.matrix.scale(scale, 1);
                 videoTexture.matrix.translate((1 - scale) / 2, 0);
             } else {
-                // ビデオが画面より縦長な場合：上下をカット
                 const scale = videoAspect / canvasAspect;
                 videoTexture.matrix.scale(1, scale);
                 videoTexture.matrix.translate(0, (1 - scale) / 2);
@@ -80,7 +81,6 @@
             document.body.appendChild(renderer.domElement);
             document.body.appendChild(VRButton.createButton(renderer));
 
-            // Video Texture & Background
             videoTexture = new THREE.VideoTexture(video);
             scene.background = videoTexture;
 
@@ -88,33 +88,61 @@
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
             const mat = new CANNON.Material();
-            world.addContactMaterial(new CANNON.ContactMaterial(mat, mat, { friction: 0.5, restitution: 0.3 }));
+            const fingerMat = new CANNON.Material(); // 指用の材質
+            world.addContactMaterial(new CANNON.ContactMaterial(mat, mat, { friction: 0.5, restitution: 0.1 }));
+            world.addContactMaterial(new CANNON.ContactMaterial(mat, fingerMat, { friction: 1.0 })); // 指は滑りにくく
 
-            // Invisible Floor
-            const floorBody = new CANNON.Body({ mass: 0 });
-            floorBody.addShape(new CANNON.Box(new CANNON.Vec3(2, 0.1, 2)));
-            floorBody.position.set(0, -0.6, -1);
-            world.addBody(floorBody);
+            // --- 机 (Visible Desk) ---
+            const deskSize = { w: 1.0, h: 0.05, d: 0.5 };
+            const deskPos = { x: 0, y: -0.2, z: -0.6 }; // 目の前
 
-            // Green Cube
-            const cubeSize = 0.12;
-            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize), new THREE.MeshStandardMaterial({ color: 0x00ff00 }));
+            deskMesh = new THREE.Mesh(
+                new THREE.BoxGeometry(deskSize.w, deskSize.h, deskSize.d),
+                new THREE.MeshStandardMaterial({ color: 0xeeeeee, metalness: 0.1, roughness: 0.8 })
+            );
+            deskMesh.position.set(deskPos.x, deskPos.y, deskPos.z);
+            scene.add(deskMesh);
+
+            const deskBody = new CANNON.Body({ mass: 0, material: mat });
+            deskBody.addShape(new CANNON.Box(new CANNON.Vec3(deskSize.w/2, deskSize.h/2, deskSize.d/2)));
+            deskBody.position.set(deskPos.x, deskPos.y, deskPos.z);
+            world.addBody(deskBody);
+
+            // --- キューブ (目の前) ---
+            const cubeSize = 0.08; // 少し小さく（掴みやすく）
+            cubeMesh = new THREE.Mesh(
+                new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize), 
+                new THREE.MeshStandardMaterial({ color: 0xff4444, metalness: 0.3, roughness: 0.4 })
+            );
             scene.add(cubeMesh);
-            cubeBody = new CANNON.Body({ mass: 0.5 });
+
+            cubeBody = new CANNON.Body({ mass: 0.2, material: mat });
             cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(cubeSize/2, cubeSize/2, cubeSize/2)));
-            cubeBody.position.set(0, 0.5, -0.8);
+            // 机の少し上に配置
+            cubeBody.position.set(deskPos.x, deskPos.y + deskSize.h/2 + cubeSize/2 + 0.1, deskPos.z);
+            cubeBody.angularDamping = 0.5; // 回転しすぎないように
             world.addBody(cubeBody);
 
-            scene.add(new THREE.DirectionalLight(0xffffff, 1));
-            scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+            // Lights
+            const sunLight = new THREE.DirectionalLight(0xffffff, 1.0);
+            sunLight.position.set(1, 1, 0.5);
+            scene.add(sunLight);
+            scene.add(new THREE.AmbientLight(0xffffff, 0.5));
 
             // Fingers
             const fingerGeo = new THREE.SphereGeometry(SCALE_CONFIG.fingerRadius, 12, 12);
             for (let i = 0; i < 21; i++) {
-                const mesh = new THREE.Mesh(fingerGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6 }));
+                const mesh = new THREE.Mesh(fingerGeo, new THREE.MeshBasicMaterial({ 
+                    color: (i === 4 || i === 8) ? 0x4285F4 : 0xffffff, // 親指と人差し指の色を変える
+                    transparent: true, opacity: 0.7 
+                }));
                 scene.add(mesh);
-                const body = new CANNON.Body({ mass: 0 });
+                const body = new CANNON.Body({ mass: 0, material: fingerMat });
                 body.addShape(new CANNON.Sphere(SCALE_CONFIG.fingerRadius));
+                // 衝突判定を指先のみにする（パフォーマンスと安定性のため）
+                if (!(i === 4 || i === 8 || i === 12 || i === 16 || i === 20 || i === 0)) {
+                   body.collisionFilterGroup = 0; 
+                }
                 world.addBody(body);
                 fingers.push({ mesh, body });
             }
@@ -122,13 +150,16 @@
             // MediaPipe Hands
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
             hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
+            
             hands.onResults((results) => {
                 if (!results.multiHandLandmarks?.length) {
                     fingers.forEach(f => f.mesh.visible = false);
+                    releaseGrab();
                     return;
                 }
                 const landmarks = results.multiHandLandmarks[0];
                 const xrCamera = renderer.xr.isPresenting ? renderer.xr.getCamera(camera) : camera;
+                
                 landmarks.forEach((point, i) => {
                     const f = fingers[i];
                     f.mesh.visible = true;
@@ -137,7 +168,41 @@
                     f.body.position.set(_v.x, _v.y, _v.z);
                     f.mesh.position.copy(f.body.position);
                 });
+
+                // --- Grab Logic ---
+                const thumb = fingers[4].body.position; // 親指先
+                const index = fingers[8].body.position; // 人差し指先
+
+                // 1. 親指と人差し指の距離を計算
+                const distance = thumb.distanceTo(index);
+
+                if (distance < SCALE_CONFIG.pinchThreshold) {
+                    // つまんでいる状態
+                    if (!isPinching) {
+                        isPinching = true;
+                        // キューブとの距離を確認
+                        const distToCube = index.distanceTo(cubeBody.position);
+                        if (distToCube < SCALE_CONFIG.grabRange && !currentConstraint) {
+                            // つかむ！人差し指にキューブを固定
+                            currentConstraint = new CANNON.LockConstraint(fingers[8].body, cubeBody);
+                            world.addConstraint(currentConstraint);
+                            cubeMesh.material.color.set(0x44ff44); // 色を変える
+                        }
+                    }
+                } else {
+                    // 離した状態
+                    isPinching = false;
+                    releaseGrab();
+                }
             });
+
+            function releaseGrab() {
+                if (currentConstraint) {
+                    world.removeConstraint(currentConstraint);
+                    currentConstraint = null;
+                    cubeMesh.material.color.set(0xff4444); // 元の色に戻す
+                }
+            }
 
             const mediapipeCamera = new Camera(video, {
                 onFrame: async () => { await hands.send({ image: video }); updateBackgroundScaling(); },
@@ -149,9 +214,16 @@
                 world.step(1/60);
                 cubeMesh.position.copy(cubeBody.position);
                 cubeMesh.quaternion.copy(cubeBody.quaternion);
+                
+                // 机のメッシュ位置は物理ボディに同期（ mass:0 だが念のため）
+                deskMesh.position.copy(deskBody.position);
+
+                // 落下リセット
                 if (cubeBody.position.y < -3) {
-                    cubeBody.position.set(0, 0.5, -0.8);
+                    releaseGrab();
+                    cubeBody.position.set(deskPos.x, deskPos.y + deskSize.h/2 + cubeSize/2 + 0.3, deskPos.z);
                     cubeBody.velocity.set(0, 0, 0);
+                    cubeBody.angularVelocity.set(0, 0, 0);
                 }
                 renderer.render(scene, camera);
             });
