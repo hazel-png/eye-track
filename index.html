@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>WebXR Spatial Studio - Super Reach</title>
+    <title>WebXR - Calibrated Reach</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
@@ -11,43 +11,49 @@
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
         video { display: none; }
-        #start-overlay {
+        #overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            display: flex; align-items: center; justify-content: center;
-            background: white; z-index: 2000;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            background: rgba(255,255,255,0.9); z-index: 2000; text-align: center; padding: 20px;
         }
         .btn {
             background: #4285F4; color: white; border: none; padding: 15px 30px;
-            border-radius: 8px; font-size: 18px; cursor: pointer;
+            border-radius: 8px; font-size: 18px; cursor: pointer; margin-top: 20px;
         }
+        #instructions { font-size: 20px; color: #333; margin-bottom: 10px; }
     </style>
 </head>
 <body>
-    <div id="start-overlay">
-        <button class="btn" id="start-btn">Start Super Reach Mode</button>
+    <div id="overlay">
+        <div id="instructions">Please allow camera access.</div>
+        <button class="btn" id="action-btn">Initial Setup</button>
     </div>
     <video id="input_video" playsinline></video>
 
     <script type="module">
         import { VRButton } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/webxr/VRButton.js';
 
-        // --- Configuration for Extreme Reach ---
+        let scene, camera, renderer, world, cubeMesh, cubeBody;
+        let isCalibrated = false;
+        let calibrationZ = 0;
+        
         const SCALE_CONFIG = {
-            handSpread: 1.6,    
-            handVertical: 1.6,  
-            handDepth: 4.0,     // Much higher sensitivity for "Super Long" arms
-            zOffset: -0.6,      // Starting point moved further back
+            handSpread: 1.4,
+            handVertical: 1.4,
+            handDepth: 2.5, // Default
+            zOffset: -0.4,  // Default
             fingerRadius: 0.012
         };
 
-        let scene, camera, renderer, world, cubeMesh, cubeBody;
         const fingers = [];
         const _v = new THREE.Vector3();
         const dt = 1/60;
 
         async function init() {
-            document.getElementById('start-overlay').remove();
+            const actionBtn = document.getElementById('action-btn');
+            const instructions = document.getElementById('instructions');
 
+            // --- Setup Three.js ---
             scene = new THREE.Scene();
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -56,27 +62,18 @@
             document.body.appendChild(renderer.domElement);
             document.body.appendChild(VRButton.createButton(renderer));
 
+            // --- Setup Physics ---
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
-            
             const handMat = new CANNON.Material("handMat");
             const objectMat = new CANNON.Material("objectMat");
-            const contactMat = new CANNON.ContactMaterial(handMat, objectMat, {
-                friction: 1.0,
-                restitution: 0.0,
-                contactEquationStiffness: 1e7,
-                contactEquationRelaxation: 3
-            });
-            world.addContactMaterial(contactMat);
+            world.addContactMaterial(new CANNON.ContactMaterial(handMat, objectMat, { friction: 1.0, restitution: 0.0 }));
 
-            // --- Layout ---
-            const DESK_Z = -0.4; 
-            const DESK_Y = 1.0;   
-
+            // Desk & Cube
+            const DESK_Z = -0.4;
             const deskMesh = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.05, 0.5), new THREE.MeshStandardMaterial({ color: 0xeeeeee }));
-            deskMesh.position.set(0, DESK_Y, DESK_Z);
+            deskMesh.position.set(0, 1.0, DESK_Z);
             scene.add(deskMesh);
-
             const deskBody = new CANNON.Body({ mass: 0, material: objectMat });
             deskBody.addShape(new CANNON.Box(new CANNON.Vec3(0.5, 0.025, 0.25)));
             deskBody.position.copy(deskMesh.position);
@@ -84,65 +81,57 @@
 
             cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.08), new THREE.MeshStandardMaterial({ color: 0x4285F4 }));
             scene.add(cubeMesh);
-            cubeBody = new CANNON.Body({ 
-                mass: 0.1, 
-                material: objectMat,
-                linearDamping: 0.5,
-                angularDamping: 0.5 
-            });
+            cubeBody = new CANNON.Body({ mass: 0.1, material: objectMat, linearDamping: 0.5, angularDamping: 0.5 });
             cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.04, 0.04, 0.04)));
-            cubeBody.position.set(0, DESK_Y + 0.2, DESK_Z);
+            cubeBody.position.set(0, 1.2, DESK_Z);
             world.addBody(cubeBody);
 
+            // Neon Green Fingers for better visibility
             const fingerGeo = new THREE.SphereGeometry(SCALE_CONFIG.fingerRadius, 16, 16);
             for (let i = 0; i < 21; i++) {
-                const mesh = new THREE.Mesh(fingerGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.7 }));
+                const mesh = new THREE.Mesh(fingerGeo, new THREE.MeshStandardMaterial({ 
+                    color: 0x00ff00, 
+                    emissive: 0x00ff00, 
+                    emissiveIntensity: 0.5 
+                }));
                 scene.add(mesh);
-                const body = new CANNON.Body({ 
-                    mass: 0, 
-                    material: handMat,
-                    collisionFilterGroup: 2,
-                    collisionFilterMask: 1 
-                });
+                const body = new CANNON.Body({ mass: 0, material: handMat, type: CANNON.Body.KINEMATIC });
                 body.addShape(new CANNON.Sphere(SCALE_CONFIG.fingerRadius));
-                body.type = CANNON.Body.KINEMATIC; 
                 world.addBody(body);
                 fingers.push({ mesh, body });
             }
 
-            scene.add(new THREE.AmbientLight(0xffffff, 1.0));
+            scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+            directionalLight.position.set(0, 2, 2);
+            scene.add(directionalLight);
 
+            // --- Hand Tracking & Calibration Logic ---
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
-            hands.setOptions({ 
-                maxNumHands: 1, 
-                modelComplexity: 1, 
-                minDetectionConfidence: 0.8, 
-                minTrackingConfidence: 0.8 
-            });
+            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.8, minTrackingConfidence: 0.8 });
 
             hands.onResults((results) => {
                 if (!results.multiHandLandmarks?.length) return;
-                const xrCamera = renderer.xr.getCamera(camera);
                 const landmarks = results.multiHandLandmarks[0];
+                
+                // Calibration capture
+                if (!isCalibrated) {
+                    calibrationZ = landmarks[0].z; // Use wrist Z
+                    return;
+                }
 
+                const xrCamera = renderer.xr.getCamera(camera);
                 landmarks.forEach((point, i) => {
                     const f = fingers[i];
-                    
-                    // Extreme mapping
                     _v.set(
                         (point.x - 0.5) * SCALE_CONFIG.handSpread, 
                         -(point.y - 0.5) * SCALE_CONFIG.handVertical, 
                         -point.z * SCALE_CONFIG.handDepth + SCALE_CONFIG.zOffset
                     );
-                    
                     _v.applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
                     
                     const nextPos = new CANNON.Vec3(_v.x, _v.y, _v.z);
-                    f.body.velocity.set(
-                        (nextPos.x - f.body.position.x) / dt,
-                        (nextPos.y - f.body.position.y) / dt,
-                        (nextPos.z - f.body.position.z) / dt
-                    );
+                    f.body.velocity.set((nextPos.x - f.body.position.x)/dt, (nextPos.y - f.body.position.y)/dt, (nextPos.z - f.body.position.z)/dt);
                     f.body.position.copy(nextPos);
                     f.mesh.position.copy(f.body.position);
                 });
@@ -155,6 +144,23 @@
             });
             cameraUtils.start();
 
+            // Calibration Flow
+            actionBtn.innerText = "Set Arm Reach";
+            instructions.innerHTML = "<b>Step 1:</b> Fully extend your arm toward the camera.<br>Hold it there and click the button.";
+            
+            actionBtn.onclick = () => {
+                if (!isCalibrated) {
+                    // Logic: If wrist Z is e.g. -0.2, we map that to the desk distance
+                    // Dynamic scaling based on your actual detected arm depth
+                    const observedDepth = Math.abs(calibrationZ);
+                    SCALE_CONFIG.handDepth = 1.0 / (observedDepth || 0.1) * 0.8; 
+                    SCALE_CONFIG.zOffset = -0.2; 
+                    
+                    isCalibrated = true;
+                    document.getElementById('overlay').remove();
+                }
+            };
+
             renderer.setAnimationLoop(() => {
                 world.step(dt);
                 cubeMesh.position.copy(cubeBody.position);
@@ -163,7 +169,7 @@
             });
         }
 
-        document.getElementById('start-btn').addEventListener('click', init);
+        document.getElementById('action-btn').addEventListener('click', init, {once: true});
     </script>
 </body>
 </html>
