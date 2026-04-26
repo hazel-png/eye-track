@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>WebXR Spatial Studio - Camera Background</title>
+    <title>WebXR Spatial Studio - Fixed Aspect</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
@@ -24,169 +24,143 @@
 </head>
 <body>
     <div id="start-overlay">
-        <button class="btn" id="start-btn">カメラと物理空間を開始</button>
+        <button class="btn" id="start-btn">等身大モードで開始</button>
     </div>
     <video id="input_video" playsinline></video>
 
     <script type="module">
         import { VRButton } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/webxr/VRButton.js';
 
-        // --- 設定値 ---
         const SCALE_CONFIG = {
             handSpread: 1.2,
             handVertical: 1.2,
             handDepth: 1.5,
-            zOffset: -0.5, // 自分の手前に表示するためのオフセット
+            zOffset: -0.5,
             fingerRadius: 0.015
         };
 
         let scene, camera, renderer, world, cubeMesh, cubeBody, videoTexture;
         const fingers = [];
         const _v = new THREE.Vector3();
+        const video = document.getElementById('input_video');
+
+        // 背景映像の比率を補正する関数
+        function updateBackgroundScaling() {
+            if (!videoTexture || video.videoWidth === 0) return;
+
+            const videoAspect = video.videoWidth / video.videoHeight;
+            const canvasAspect = window.innerWidth / window.innerHeight;
+
+            videoTexture.matrixAutoUpdate = false;
+            videoTexture.matrix.identity();
+
+            if (videoAspect > canvasAspect) {
+                // ビデオが画面より横長な場合：左右をカット
+                const scale = canvasAspect / videoAspect;
+                videoTexture.matrix.scale(scale, 1);
+                videoTexture.matrix.translate((1 - scale) / 2, 0);
+            } else {
+                // ビデオが画面より縦長な場合：上下をカット
+                const scale = videoAspect / canvasAspect;
+                videoTexture.matrix.scale(1, scale);
+                videoTexture.matrix.translate(0, (1 - scale) / 2);
+            }
+        }
 
         async function init() {
             document.getElementById('start-overlay').remove();
 
-            // 1. Scene & Camera
             scene = new THREE.Scene();
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
             
-            // 2. Renderer
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
             document.body.appendChild(VRButton.createButton(renderer));
 
-            // 3. Video Background Setup
-            const video = document.getElementById('input_video');
+            // Video Texture & Background
             videoTexture = new THREE.VideoTexture(video);
-            scene.background = videoTexture; // ビデオを背景に設定
+            scene.background = videoTexture;
 
-            // 4. Physics World
+            // Physics
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
             const mat = new CANNON.Material();
             world.addContactMaterial(new CANNON.ContactMaterial(mat, mat, { friction: 0.5, restitution: 0.3 }));
 
-            // 5. Invisible Floor (机のような役割)
-            const floorHeight = -0.5;
-            const floorBody = new CANNON.Body({ mass: 0, material: mat });
+            // Invisible Floor
+            const floorBody = new CANNON.Body({ mass: 0 });
             floorBody.addShape(new CANNON.Box(new CANNON.Vec3(2, 0.1, 2)));
-            floorBody.position.set(0, floorHeight, -1);
+            floorBody.position.set(0, -0.6, -1);
             world.addBody(floorBody);
 
-            // デバッグ用の床を表示したい場合はここを有効に
-            /*
-            const floorMesh = new THREE.Mesh(new THREE.BoxGeometry(4, 0.1, 4), new THREE.MeshStandardMaterial({ color: 0x333333, transparent: true, opacity: 0.3 }));
-            floorMesh.position.set(0, floorHeight, -1);
-            scene.add(floorMesh);
-            */
-
-            // 6. Interactive Cube
-            const cubeSize = 0.15;
-            cubeMesh = new THREE.Mesh(
-                new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize), 
-                new THREE.MeshStandardMaterial({ color: 0x00ff00, metalness: 0.5, roughness: 0.2 })
-            );
+            // Green Cube
+            const cubeSize = 0.12;
+            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize), new THREE.MeshStandardMaterial({ color: 0x00ff00 }));
             scene.add(cubeMesh);
-
-            cubeBody = new CANNON.Body({ mass: 0.5, material: mat });
+            cubeBody = new CANNON.Body({ mass: 0.5 });
             cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(cubeSize/2, cubeSize/2, cubeSize/2)));
             cubeBody.position.set(0, 0.5, -0.8);
             world.addBody(cubeBody);
 
-            // 7. Light
-            const light = new THREE.DirectionalLight(0xffffff, 1);
-            light.position.set(1, 1, 1);
-            scene.add(light);
-            scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+            scene.add(new THREE.DirectionalLight(0xffffff, 1));
+            scene.add(new THREE.AmbientLight(0xffffff, 0.6));
 
-            // 8. Fingers (Physics Spheres)
-            const fingerGeo = new THREE.SphereGeometry(SCALE_CONFIG.fingerRadius, 16, 16);
+            // Fingers
+            const fingerGeo = new THREE.SphereGeometry(SCALE_CONFIG.fingerRadius, 12, 12);
             for (let i = 0; i < 21; i++) {
-                const mesh = new THREE.Mesh(fingerGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8 }));
+                const mesh = new THREE.Mesh(fingerGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6 }));
                 scene.add(mesh);
-                const body = new CANNON.Body({ mass: 0, material: mat });
+                const body = new CANNON.Body({ mass: 0 });
                 body.addShape(new CANNON.Sphere(SCALE_CONFIG.fingerRadius));
                 world.addBody(body);
                 fingers.push({ mesh, body });
             }
 
-            // 9. MediaPipe Hands
-            const hands = new Hands({
-                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
-            });
-
-            hands.setOptions({
-                maxNumHands: 1,
-                modelComplexity: 1,
-                minDetectionConfidence: 0.7,
-                minTrackingConfidence: 0.7
-            });
-
+            // MediaPipe Hands
+            const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
             hands.onResults((results) => {
                 if (!results.multiHandLandmarks?.length) {
                     fingers.forEach(f => f.mesh.visible = false);
                     return;
                 }
-
                 const landmarks = results.multiHandLandmarks[0];
                 const xrCamera = renderer.xr.isPresenting ? renderer.xr.getCamera(camera) : camera;
-
                 landmarks.forEach((point, i) => {
                     const f = fingers[i];
                     f.mesh.visible = true;
-
-                    // 座標マッピング
-                    _v.set(
-                        (point.x - 0.5) * SCALE_CONFIG.handSpread,
-                        -(point.y - 0.5) * SCALE_CONFIG.handVertical,
-                        -point.z * SCALE_CONFIG.handDepth + SCALE_CONFIG.zOffset
-                    );
-
-                    // カメラの向きに合わせて座標を変換
+                    _v.set((point.x - 0.5) * SCALE_CONFIG.handSpread, -(point.y - 0.5) * SCALE_CONFIG.handVertical, -point.z * SCALE_CONFIG.handDepth + SCALE_CONFIG.zOffset);
                     _v.applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
-
                     f.body.position.set(_v.x, _v.y, _v.z);
                     f.mesh.position.copy(f.body.position);
                 });
             });
 
-            // 10. Camera Start
             const mediapipeCamera = new Camera(video, {
-                onFrame: async () => {
-                    await hands.send({ image: video });
-                },
-                facingMode: "environment",
-                width: 1280,
-                height: 720
+                onFrame: async () => { await hands.send({ image: video }); updateBackgroundScaling(); },
+                facingMode: "environment", width: 1280, height: 720
             });
             mediapipeCamera.start();
 
-            // 11. Animation Loop
             renderer.setAnimationLoop(() => {
                 world.step(1/60);
-                
-                // 物理演算をメッシュに反映
                 cubeMesh.position.copy(cubeBody.position);
                 cubeMesh.quaternion.copy(cubeBody.quaternion);
-
-                // 落下しすぎたらリセット
-                if (cubeBody.position.y < -5) {
+                if (cubeBody.position.y < -3) {
                     cubeBody.position.set(0, 0.5, -0.8);
                     cubeBody.velocity.set(0, 0, 0);
                 }
-
                 renderer.render(scene, camera);
             });
 
-            // Handle Resize
             window.addEventListener('resize', () => {
                 camera.aspect = window.innerWidth / window.innerHeight;
                 camera.updateProjectionMatrix();
                 renderer.setSize(window.innerWidth, window.innerHeight);
+                updateBackgroundScaling();
             });
         }
 
