@@ -3,188 +3,138 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>VR Hand Tracker - Fixed Length</title>
+    <title>VR Pro Hand Tracker</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-    <style>
-        body { margin: 0; overflow: hidden; background: #000; }
-        video { display: none; }
-        #vr-ui {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            display: flex; align-items: center; justify-content: center;
-            background: #fff; z-index: 2000;
-        }
-        .btn { background: #1a73e8; color: white; border: none; padding: 20px 40px; border-radius: 50px; font-size: 20px; cursor: pointer; }
-    </style>
+    <style>body { margin: 0; overflow: hidden; background: #000; } video { display: none; }</style>
 </head>
 <body>
-    <div id="vr-ui">
-        <button class="btn" id="start-btn">START VR</button>
+    <div id="vr-ui" style="position:fixed; top:0; left:0; width:100%; height:100%; display:flex; align-items:center; justify-content:center; background:#fff; z-index:2000;">
+        <button id="start-btn" style="background:#1a73e8; color:white; border:none; padding:20px 40px; border-radius:50px; font-size:20px; cursor:pointer;">ENTER ULTRA VR</button>
     </div>
     <video id="input_video" playsinline></video>
 
     <script type="module">
         import { VRButton } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/webxr/VRButton.js';
 
-        let scene, camera, renderer, world, cubeMesh, cubeBody, deskGroup;
-        let calibRing, instrMesh;
-        let isCalibrated = false;
-        let calibCount = 0;
-        let maxReachZ = 0;
-
-        // zOffsetを調整して、手首の回転による前後のブレを吸収
-        const SCALE_CONFIG = { handSpread: 1.6, handVertical: 1.6, handDepth: 4.0, zOffset: -0.3, fingerRadius: 0.015 };
+        let scene, camera, renderer, world, cubeBody, cubeMesh;
+        let isCalibrated = false, calibCount = 0, reachLimit = 0;
         const fingers = [];
-        const _v = new THREE.Vector3();
-
-        function createTextTexture(text) {
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d');
-            canvas.width = 512; canvas.height = 128;
-            ctx.font = 'bold 44px Arial';
-            ctx.fillStyle = '#39ff14';
-            ctx.textAlign = 'center';
-            ctx.fillText(text, 256, 80);
-            return new THREE.CanvasTexture(canvas);
-        }
+        const smoothedPoints = Array.from({ length: 21 }, () => new THREE.Vector3());
+        
+        // 指数平滑化フィルタの係数（小さいほどヌルヌル、大きいほど爆速反応）
+        const LERP_FACTOR = 0.35; 
 
         async function init() {
             document.getElementById('vr-ui').style.display = 'none';
-
             scene = new THREE.Scene();
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.01, 100);
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
             document.body.appendChild(VRButton.createButton(renderer));
 
-            // Calibration UI (映像なし)
-            instrMesh = new THREE.Mesh(
-                new THREE.PlaneGeometry(0.6, 0.15),
-                new THREE.MeshBasicMaterial({ map: createTextTexture("EXTEND YOUR ARM"), transparent: true })
-            );
-            instrMesh.position.set(0, 1.2, -0.6);
-            scene.add(instrMesh);
-
-            calibRing = new THREE.Mesh(
-                new THREE.TorusGeometry(0.08, 0.005, 16, 100),
-                new THREE.MeshBasicMaterial({ color: 0x1a73e8 })
-            );
-            calibRing.position.set(0, 1.0, -0.6);
-            scene.add(calibRing);
+            // UI
+            const instr = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 0.2), new THREE.MeshBasicMaterial({ 
+                map: createTextTex("MAX EXTEND & HOLD"), transparent: true 
+            }));
+            instr.position.set(0, 1.2, -0.6);
+            scene.add(instr);
 
             // Physics
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
 
-            // Desk & Cube
-            deskGroup = new THREE.Group();
-            const deskMesh = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.05, 0.6), new THREE.MeshStandardMaterial({ color: 0x333333 }));
-            deskMesh.position.set(0, 0.8, -0.5);
-            deskGroup.add(deskMesh);
-            scene.add(deskGroup);
-            deskGroup.visible = false;
-
-            const deskBody = new CANNON.Body({ mass: 0 });
-            deskBody.addShape(new CANNON.Box(new CANNON.Vec3(0.6, 0.025, 0.3)));
-            deskBody.position.set(0, 0.8, -0.5);
-            world.addBody(deskBody);
-
-            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.08), new THREE.MeshStandardMaterial({ color: 0x4285F4 }));
+            // Objects
+            const desk = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.05, 0.6), new THREE.MeshStandardMaterial({color:0x222222}));
+            desk.position.set(0, 0.8, -0.5);
+            scene.add(desk);
+            
+            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.06), new THREE.MeshStandardMaterial({color:0x4285F4}));
             scene.add(cubeMesh);
-            cubeMesh.visible = false;
-            cubeBody = new CANNON.Body({ mass: 0.2 });
-            cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.04, 0.04, 0.04)));
+            cubeBody = new CANNON.Body({ mass: 0.1, shape: new CANNON.Box(new CANNON.Vec3(0.03, 0.03, 0.03)) });
             cubeBody.position.set(0, 1.1, -0.5);
             world.addBody(cubeBody);
 
-            // Finger Visuals
+            // High-precision Spheres
             for (let i = 0; i < 21; i++) {
-                const mesh = new THREE.Mesh(new THREE.SphereGeometry(SCALE_CONFIG.fingerRadius, 8, 8), new THREE.MeshStandardMaterial({ color: 0x39ff14 }));
+                const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.012, 16, 16), new THREE.MeshStandardMaterial({color: 0x00ff00}));
                 scene.add(mesh);
-                const body = new CANNON.Body({ mass: 0, type: CANNON.Body.KINEMATIC });
-                body.addShape(new CANNON.Sphere(SCALE_CONFIG.fingerRadius));
+                const body = new CANNON.Body({ mass: 0, type: CANNON.Body.KINEMATIC, shape: new CANNON.Sphere(0.012) });
                 world.addBody(body);
                 fingers.push({ mesh, body });
             }
 
-            scene.add(new THREE.AmbientLight(0xffffff, 1.0));
+            scene.add(new THREE.AmbientLight(0xffffff, 1));
 
-            const video = document.getElementById('input_video');
-            const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
-            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
+            const hands = new Hands({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.8, minTrackingConfidence: 0.8 });
 
-            hands.onResults((results) => {
-                if (!results.multiHandLandmarks?.length) return;
-                const landmarks = results.multiHandLandmarks[0];
-                
-                // 手首(0)と中指の付け根(9)の平均をとることで、手首の回転による長さ変化を抑える
-                const wrist = landmarks[0];
-                const palmCenterZ = (landmarks[0].z + landmarks[9].z) / 2;
-                
+            hands.onResults((res) => {
+                if (!res.multiHandLandmarks?.length) return;
+                const landmarks = res.multiHandLandmarks[0];
                 const xrCamera = renderer.xr.getCamera(camera);
 
+                // 1. キャリブレーション（腕の長さを物理限界として取得）
                 if (!isCalibrated && renderer.xr.isPresenting) {
-                    // 画面中央付近でキャリブレーション
-                    const inTarget = Math.abs(wrist.x - 0.5) < 0.25 && Math.abs(wrist.y - 0.5) < 0.25;
-                    if (inTarget) {
+                    const wrist = landmarks[0];
+                    if (Math.abs(wrist.x - 0.5) < 0.2) {
                         calibCount++;
-                        maxReachZ = Math.max(maxReachZ, Math.abs(palmCenterZ));
-                        
-                        const progress = Math.min(calibCount / 60, 1);
-                        calibRing.material.color.lerpColors(new THREE.Color(0x1a73e8), new THREE.Color(0x39ff14), progress);
-                        
+                        reachLimit = Math.max(reachLimit, Math.abs(wrist.z));
                         if (calibCount > 60) {
-                            // 腕を伸ばした時のZ値を「1.0」とする
-                            SCALE_CONFIG.handDepth = 0.85 / (maxReachZ || 0.1);
                             isCalibrated = true;
-                            calibRing.visible = false;
-                            instrMesh.visible = false;
-                            deskGroup.visible = true;
-                            cubeMesh.visible = true;
+                            instr.visible = false;
                         }
-                    } else {
-                        calibCount = 0;
-                        calibRing.material.color.set(0x1a73e8);
                     }
                 }
 
-                landmarks.forEach((point, i) => {
-                    const f = fingers[i];
-                    // 奥行き計算において、手首の角度の影響を減らすため
-                    // 生のZ値にスケーリングを適用
-                    _v.set(
-                        (point.x - 0.5) * SCALE_CONFIG.handSpread, 
-                        -(point.y - 0.5) * SCALE_CONFIG.handVertical, 
-                        -point.z * SCALE_CONFIG.handDepth + SCALE_CONFIG.zOffset
+                // 2. 高精度トラッキングロジック
+                landmarks.forEach((pt, i) => {
+                    // 基本の3D変換
+                    const targetPos = new THREE.Vector3(
+                        (pt.x - 0.5) * 1.8, 
+                        -(pt.y - 0.5) * 1.8, 
+                        -pt.z * (0.8 / (reachLimit || 0.15)) - 0.2
                     );
-                    _v.applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
-                    f.body.position.copy(new CANNON.Vec3(_v.x, _v.y, _v.z));
-                    f.mesh.position.copy(f.body.position);
+
+                    // フィルタリング（ジッタ除去）
+                    smoothedPoints[i].lerp(targetPos, LERP_FACTOR);
+
+                    // VR空間のカメラ位置へ同期
+                    const finalPos = smoothedPoints[i].clone().applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
+                    
+                    fingers[i].body.position.set(finalPos.x, finalPos.y, finalPos.z);
+                    fingers[i].mesh.position.copy(fingers[i].body.position);
                 });
             });
 
-            const cameraUtils = new Camera(video, {
+            const video = document.getElementById('input_video');
+            new Camera(video, {
                 onFrame: async () => { await hands.send({ image: video }); },
-                facingMode: "environment",
-                width: 1280, height: 720
-            });
-            cameraUtils.start();
+                facingMode: "environment", width: 1280, height: 720
+            }).start();
 
             renderer.setAnimationLoop(() => {
-                if (isCalibrated) {
-                    world.step(1/60);
-                    cubeMesh.position.copy(cubeBody.position);
-                    cubeMesh.quaternion.copy(cubeBody.quaternion);
-                }
+                world.step(1/60);
+                cubeMesh.position.copy(cubeBody.position);
+                cubeMesh.quaternion.copy(cubeBody.quaternion);
                 renderer.render(scene, camera);
             });
         }
 
-        document.getElementById('start-btn').addEventListener('click', init);
+        function createTextTex(text) {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = 512; canvas.height = 128;
+            ctx.font = 'bold 40px Arial'; ctx.fillStyle = '#00ff00'; ctx.textAlign = 'center';
+            ctx.fillText(text, 256, 80);
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        document.getElementById('start-btn').onclick = init;
     </script>
 </body>
 </html>
