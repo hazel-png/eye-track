@@ -3,29 +3,24 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Titan VR: Anatomical Precision Studio</title>
+    <title>Titan VR: Aspect Corrected Studio</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
+        body { margin: 0; overflow: hidden; background: #000; }
         video { display: none; }
         #overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             display: flex; align-items: center; justify-content: center;
-            background: #ffffff; z-index: 2000;
+            background: #fff; z-index: 2000;
         }
-        .start-btn {
-            background: #1a73e8; color: white; border: none; padding: 25px 60px;
-            border-radius: 100px; font-size: 22px; font-weight: bold; cursor: pointer;
-        }
+        .btn { background: #1a73e8; color: white; border: none; padding: 20px 50px; border-radius: 50px; font-size: 20px; cursor: pointer; }
     </style>
 </head>
 <body>
-    <div id="overlay">
-        <button class="start-btn" id="start-btn">INITIALIZE VR STUDIO</button>
-    </div>
+    <div id="overlay"><button class="btn" id="start-btn">START VR SESSION</button></div>
     <video id="input_video" playsinline></video>
 
     <script type="module">
@@ -38,72 +33,56 @@
         const CONFIG = {
             handSpread: 1.6,
             handVertical: 1.6,
-            handDepth: 4.5,     // Calculated during calibration
-            zOffset: -0.3,      // Base distance from user
-            smoothing: 0.12,    // Movement fluidity
-            maxArmLength: 0.7   // Physical limit in meters
+            zOffset: -0.3,
+            smoothing: 0.15,
+            maxArmLength: 0.7,
+            handDepth: 4.5
         };
 
         const fingers = [];
-        const _v = new THREE.Vector3();
         const dt = 1/60;
 
         async function init() {
             document.getElementById('overlay').remove();
+            const video = document.getElementById('input_video');
 
-            // --- Graphics ---
             scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x0a0a0a);
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.01, 100);
-            
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
             document.body.appendChild(VRButton.createButton(renderer));
 
-            // --- Physics ---
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
-            const handMat = new CANNON.Material("hand");
-            const objMat = new CANNON.Material("obj");
-            world.addContactMaterial(new CANNON.ContactMaterial(handMat, objMat, { friction: 0.6, restitution: 0.1 }));
 
-            // --- Calibration UI ---
-            const ringGeo = new THREE.TorusGeometry(0.15, 0.012, 16, 100);
-            const ringMat = new THREE.MeshBasicMaterial({ color: 0x4285F4, transparent: true, opacity: 0.8 });
-            calibRing = new THREE.Mesh(ringGeo, ringMat);
+            // Assets
+            const ringGeo = new THREE.TorusGeometry(0.15, 0.01, 16, 100);
+            calibRing = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0x4285F4 }));
             calibRing.position.set(0, 1.3, -0.6); 
             scene.add(calibRing);
 
-            // --- Assets ---
             deskGroup = new THREE.Group();
-            const desk = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.05, 0.8), new THREE.MeshStandardMaterial({ color: 0xffffff }));
+            const desk = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.05, 0.8), new THREE.MeshStandardMaterial());
             desk.position.set(0, 0.9, -0.6);
             deskGroup.add(desk);
             scene.add(deskGroup);
             deskGroup.visible = false;
 
-            const deskBody = new CANNON.Body({ mass: 0 });
-            deskBody.addShape(new CANNON.Box(new CANNON.Vec3(0.75, 0.025, 0.4)));
-            deskBody.position.set(0, 0.9, -0.6);
-            world.addBody(deskBody);
-
             cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.08), new THREE.MeshStandardMaterial({ color: 0x1a73e8 }));
             scene.add(cubeMesh);
             cubeMesh.visible = false;
 
-            cubeBody = new CANNON.Body({ mass: 0.5, material: objMat, linearDamping: 0.5 });
+            cubeBody = new CANNON.Body({ mass: 0.5 });
             cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.04, 0.04, 0.04)));
             cubeBody.position.set(0, 1.2, -0.6);
             world.addBody(cubeBody);
 
-            // --- Finger Initialization (Ensure 21 individual spheres) ---
-            const fMat = new THREE.MeshStandardMaterial({ color: 0x39ff14, emissive: 0x39ff14, emissiveIntensity: 0.5 });
             for (let i = 0; i < 21; i++) {
-                const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.015, 16, 16), fMat);
+                const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.015, 16, 16), new THREE.MeshStandardMaterial({ color: 0x39ff14 }));
                 scene.add(mesh);
-                const body = new CANNON.Body({ mass: 0, material: handMat, type: CANNON.Body.KINEMATIC });
+                const body = new CANNON.Body({ mass: 0, type: CANNON.Body.KINEMATIC });
                 body.addShape(new CANNON.Sphere(0.015));
                 world.addBody(body);
                 fingers.push({ mesh, body, lastPos: new THREE.Vector3() });
@@ -111,27 +90,35 @@
 
             scene.add(new THREE.AmbientLight(0xffffff, 1.0));
 
-            // --- MediaPipe Logic ---
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
             hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.8, minTrackingConfidence: 0.8 });
 
             hands.onResults((results) => {
                 if (!results.multiHandLandmarks?.length) return;
+                
+                // --- ASPECT RATIO CORRECTION ---
+                const videoWidth = video.videoWidth;
+                const videoHeight = video.videoHeight;
+                const videoAspect = videoWidth / videoHeight;
+                const screenAspect = window.innerWidth / window.innerHeight;
+                
+                // Correction factor to prevent stretching
+                let xMultiplier = 1;
+                let yMultiplier = 1;
+                if (videoAspect > screenAspect) {
+                    xMultiplier = videoAspect / screenAspect;
+                } else {
+                    yMultiplier = screenAspect / videoAspect;
+                }
+
                 const landmarks = results.multiHandLandmarks[0];
                 const wrist = landmarks[0];
                 const xrCamera = renderer.xr.getCamera(camera);
 
-                // --- CALIBRATION: Map Max Reach ---
                 if (!isCalibrated && renderer.xr.isPresenting) {
-                    const isCentered = Math.abs(wrist.x - 0.5) < 0.2 && Math.abs(wrist.y - 0.5) < 0.2;
-                    if (isCentered) {
+                    if (Math.abs(wrist.x - 0.5) < 0.2 && Math.abs(wrist.y - 0.5) < 0.2) {
                         calibFrames++;
-                        if (wrist.z < maxReachZ) maxReachZ = wrist.z; // Track furthest point (smallest Z)
-                        
-                        const progress = calibFrames / 90;
-                        calibRing.material.color.lerp(new THREE.Color(0x39ff14), 0.1);
-                        calibRing.scale.setScalar(1 + Math.sin(Date.now() * 0.01) * 0.1);
-
+                        if (wrist.z < maxReachZ) maxReachZ = wrist.z;
                         if (calibFrames > 90) {
                             CONFIG.handDepth = CONFIG.maxArmLength / Math.abs(maxReachZ || 0.1);
                             isCalibrated = true;
@@ -142,37 +129,28 @@
                     }
                 }
 
-                // --- SKELETAL POSITIONING ---
-                // We calculate each joint relative to the wrist to prevent "one sphere" bug
                 const wristDepth = (wrist.z / maxReachZ) * -CONFIG.maxArmLength + CONFIG.zOffset;
                 const wristWorld = new THREE.Vector3(
-                    (wrist.x - 0.5) * CONFIG.handSpread,
-                    -(wrist.y - 0.5) * CONFIG.handVertical,
+                    (wrist.x - 0.5) * CONFIG.handSpread * xMultiplier,
+                    -(wrist.y - 0.5) * CONFIG.handVertical * yMultiplier,
                     wristDepth
                 ).applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
 
                 landmarks.forEach((point, i) => {
                     const f = fingers[i];
-                    
-                    // 1. Calculate relative offset from wrist
-                    const relX = (point.x - wrist.x) * CONFIG.handSpread;
-                    const relY = -(point.y - wrist.y) * CONFIG.handVertical;
+                    const relX = (point.x - wrist.x) * CONFIG.handSpread * xMultiplier;
+                    const relY = -(point.y - wrist.y) * CONFIG.handVertical * yMultiplier;
                     const relZ = -(point.z - wrist.z) * CONFIG.handDepth;
 
-                    // 2. Rotate offset to match camera orientation
                     const offset = new THREE.Vector3(relX, relY, relZ).applyQuaternion(xrCamera.quaternion);
-
-                    // 3. Final Position = Wrist + Offset
                     const targetPos = new THREE.Vector3().copy(wristWorld).add(offset);
 
-                    // Smoothing & Physics update
                     f.lastPos.lerp(targetPos, CONFIG.smoothing);
                     f.body.position.copy(f.lastPos);
                     f.mesh.position.copy(f.lastPos);
                 });
             });
 
-            const video = document.getElementById('input_video');
             new Camera(video, {
                 onFrame: async () => { await hands.send({ image: video }); },
                 facingMode: "environment", width: 1280, height: 720
