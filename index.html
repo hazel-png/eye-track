@@ -3,47 +3,54 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Spatial Studio - Orientation Fixed</title>
+    <title>Spatial Studio Dual-Hand Ultra</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
         video { display: none; }
         #overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             display: flex; align-items: center; justify-content: center;
             background: #fff; z-index: 2000;
         }
-        .btn { background: #1a73e8; color: white; border: none; padding: 20px 40px; border-radius: 50px; font-size: 20px; cursor: pointer; }
+        .btn { background: #1a73e8; color: white; border: none; padding: 24px 48px; border-radius: 100px; font-size: 22px; cursor: pointer; }
     </style>
 </head>
 <body>
-    <div id="overlay"><button class="btn" id="start-btn">セットアップを開始</button></div>
+    <div id="overlay">
+        <button class="btn" id="start-btn">両手モードで開始</button>
+    </div>
     <video id="input_video" playsinline></video>
 
     <script type="module">
         import { VRButton } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/webxr/VRButton.js';
 
-        let scene, camera, renderer, world, cubeMesh, cubeBody;
+        let scene, camera, renderer, world, cubeMesh, cubeBody, deskGroup;
         let calibRing, isCalibrated = false, calibCount = 0, accumZ = 0;
-        
+
         const CONFIG = {
-            handSpread: 1.6, handVertical: 1.6, handDepth: 4.0, zOffset: -0.25,
-            smoothing: 0.2, // 追従性重視
-            targetZ: -0.6
+            handSpread: 1.6, handVertical: 1.6, handDepth: 4.5, zOffset: -0.25,
+            smoothing: 0.18, targetZ: -0.6
         };
 
-        const fingers = [];
+        // 手のデータ構造（2本分）
+        const handsData = [
+            { label: 'Right', color: 0x39ff14, fingers: [], lastPos: Array.from({length: 21}, () => new THREE.Vector3()) },
+            { label: 'Left',  color: 0x00f3ff, fingers: [], lastPos: Array.from({length: 21}, () => new THREE.Vector3()) }
+        ];
+
+        const _tempV = new THREE.Vector3();
         const dt = 1/60;
-        const _v = new THREE.Vector3();
-        const _lastWristZ = { value: 0 }; // 深度急変防止用
 
         async function init() {
             document.getElementById('overlay').remove();
+
             scene = new THREE.Scene();
-            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 100);
+            scene.background = new THREE.Color(0x050505);
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.01, 100);
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.xr.enabled = true;
@@ -53,97 +60,110 @@
             // Physics
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
-            const handMat = new CANNON.Material();
-            const objMat = new CANNON.Material();
+            const handMat = new CANNON.Material("hand");
+            const objMat = new CANNON.Material("obj");
             world.addContactMaterial(new CANNON.ContactMaterial(handMat, objMat, { friction: 0.5, restitution: 0.1 }));
 
-            // Calibration UI
+            // Calibration Ring
             calibRing = new THREE.Mesh(
-                new THREE.TorusGeometry(0.1, 0.005, 16, 100),
+                new THREE.TorusGeometry(0.12, 0.008, 16, 100),
                 new THREE.MeshBasicMaterial({ color: 0x4285F4, transparent: true, opacity: 0.8 })
             );
             calibRing.position.set(0, 1.3, CONFIG.targetZ);
             scene.add(calibRing);
 
-            // Objects
-            const desk = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.05, 0.6), new THREE.MeshStandardMaterial({ color: 0xffffff }));
-            desk.position.set(0, 0.9, -0.5);
-            scene.add(desk);
-            const deskBody = new CANNON.Body({ mass: 0 });
+            // Desk & Cube
+            deskGroup = new THREE.Group();
+            const deskBase = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.05, 0.6), new THREE.MeshStandardMaterial({ color: 0xffffff }));
+            deskBase.position.set(0, 0.9, -0.5);
+            deskGroup.add(deskBase);
+            scene.add(deskGroup);
+            deskGroup.visible = false;
+
+            const deskBody = new CANNON.Body({ mass: 0, material: objMat });
             deskBody.addShape(new CANNON.Box(new CANNON.Vec3(0.6, 0.025, 0.3)));
-            deskBody.position.copy(desk.position);
+            deskBody.position.copy(deskBase.position);
             world.addBody(deskBody);
 
             cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.08), new THREE.MeshStandardMaterial({ color: 0x1a73e8 }));
             scene.add(cubeMesh);
-            cubeBody = new CANNON.Body({ mass: 0.2, linearDamping: 0.5, angularDamping: 0.5 });
+            cubeMesh.visible = false;
+            cubeBody = new CANNON.Body({ mass: 0.3, material: objMat, linearDamping: 0.4 });
             cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.04, 0.04, 0.04)));
             cubeBody.position.set(0, 1.2, -0.5);
             world.addBody(cubeBody);
 
-            // Fingers
-            const fingerMat = new THREE.MeshStandardMaterial({ color: 0x39ff14, emissive: 0x39ff14, emissiveIntensity: 0.5 });
-            for (let i = 0; i < 21; i++) {
-                const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.015, 16, 16), fingerMat);
-                scene.add(mesh);
-                const body = new CANNON.Body({ mass: 0, type: CANNON.Body.KINEMATIC });
-                body.addShape(new CANNON.Sphere(0.015));
-                world.addBody(body);
-                fingers.push({ mesh, body, lastPos: new THREE.Vector3() });
-            }
+            // --- Dual Hand Models ---
+            handsData.forEach(h => {
+                const mat = new THREE.MeshStandardMaterial({ color: h.color, emissive: h.color, emissiveIntensity: 0.5 });
+                for (let i = 0; i < 21; i++) {
+                    const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.015, 16, 16), mat);
+                    mesh.visible = false;
+                    scene.add(mesh);
+                    const body = new CANNON.Body({ mass: 0, material: handMat, type: CANNON.Body.KINEMATIC });
+                    body.addShape(new CANNON.Sphere(0.015));
+                    world.addBody(body);
+                    h.fingers.push({ mesh, body });
+                }
+            });
 
             scene.add(new THREE.AmbientLight(0xffffff, 1.0));
 
+            // --- Hand Tracking Logic ---
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
-            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.8, minTrackingConfidence: 0.8 });
+            hands.setOptions({ 
+                maxNumHands: 2, // 両手対応
+                modelComplexity: 1, 
+                minDetectionConfidence: 0.7, 
+                minTrackingConfidence: 0.7 
+            });
 
             hands.onResults((results) => {
+                // 全ての手を一旦非表示にする
+                handsData.forEach(h => h.fingers.forEach(f => f.mesh.visible = false));
+
                 if (!results.multiHandLandmarks?.length) return;
-                const landmarks = results.multiHandLandmarks[0];
+
                 const xrCamera = renderer.xr.getCamera(camera);
-                
-                // --- 向きによる深度補正アルゴリズム ---
-                // 手首(0)と人差し指の付け根(5)の距離を画面上のピクセルベースで簡易計算
-                const dx = landmarks[5].x - landmarks[0].x;
-                const dy = landmarks[5].y - landmarks[0].y;
-                const handVisualSize = Math.sqrt(dx*dx + dy*dy);
-                
-                // 手が寝ている（水平）ほど、この距離が短くなる性質を利用してZを補正
-                const orientationFactor = Math.max(0.7, Math.min(1.3, 0.12 / (handVisualSize + 0.001)));
-                let correctedZ = landmarks[0].z * orientationFactor;
 
-                // 深度の急変を防止（ローパスフィルタ）
-                if (_lastWristZ.value === 0) _lastWristZ.value = correctedZ;
-                correctedZ = _lastWristZ.value * 0.8 + correctedZ * 0.2;
-                _lastWristZ.value = correctedZ;
+                results.multiHandLandmarks.forEach((landmarks, index) => {
+                    const classification = results.multiHandedness[index];
+                    const handType = classification.label; // "Left" or "Right"
+                    const hData = handsData.find(h => h.label === handType);
+                    if (!hData) return;
 
-                if (!isCalibrated && renderer.xr.isPresenting) {
-                    if (Math.abs(landmarks[0].x - 0.5) < 0.15) {
-                        calibCount++;
-                        accumZ += Math.abs(correctedZ);
-                        calibRing.material.color.set(0x39ff14);
-                        if (calibCount > 60) {
-                            CONFIG.handDepth = Math.abs(CONFIG.targetZ) / (accumZ / calibCount);
-                            isCalibrated = true;
-                            calibRing.visible = false;
+                    // キャリブレーション (右手で行う)
+                    if (!isCalibrated && handType === 'Right' && renderer.xr.isPresenting) {
+                        const wrist = landmarks[0];
+                        if (Math.abs(wrist.x - 0.5) < 0.18 && Math.abs(wrist.y - 0.5) < 0.18) {
+                            calibCount++;
+                            accumZ += Math.abs(wrist.z);
+                            calibRing.material.color.set(0x39ff14);
+                            if (calibCount > 60) {
+                                CONFIG.handDepth = Math.abs(CONFIG.targetZ) / (accumZ / calibCount);
+                                isCalibrated = true;
+                                calibRing.visible = false;
+                                deskGroup.visible = true;
+                                cubeMesh.visible = true;
+                            }
                         }
                     }
-                }
 
-                landmarks.forEach((point, i) => {
-                    const f = fingers[i];
-                    // 全関節に手首の補正されたZの相対値を適用
-                    const depth = (i === 0) ? correctedZ : correctedZ + (point.z - landmarks[0].z);
-                    
-                    _v.set(
-                        (point.x - 0.5) * CONFIG.handSpread,
-                        -(point.y - 0.5) * CONFIG.handVertical,
-                        -depth * CONFIG.handDepth + CONFIG.zOffset
-                    );
-                    _v.applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
-                    f.lastPos.lerp(_v, CONFIG.smoothing);
-                    f.body.position.copy(f.lastPos);
-                    f.mesh.position.copy(f.lastPos);
+                    // 座標更新とスムージング
+                    landmarks.forEach((point, i) => {
+                        const f = hData.fingers[i];
+                        f.mesh.visible = true;
+                        _tempV.set(
+                            (point.x - 0.5) * CONFIG.handSpread,
+                            -(point.y - 0.5) * CONFIG.handVertical,
+                            -point.z * CONFIG.handDepth + CONFIG.zOffset
+                        );
+                        _tempV.applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
+
+                        hData.lastPos[i].lerp(_tempV, CONFIG.smoothing);
+                        f.body.position.copy(hData.lastPos[i]);
+                        f.mesh.position.copy(hData.lastPos[i]);
+                    });
                 });
             });
 
@@ -162,6 +182,7 @@
                 renderer.render(scene, camera);
             });
         }
+
         document.getElementById('start-btn').addEventListener('click', init);
     </script>
 </body>
