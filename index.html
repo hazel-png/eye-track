@@ -3,195 +3,211 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Spatial Studio Pro - Ultimate Edition</title>
+    <title>Spatial Studio Ultra</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: 'Google Sans', Roboto, Arial, sans-serif; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Roboto', sans-serif; }
         video { display: none; }
         #overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             display: flex; align-items: center; justify-content: center;
-            background: radial-gradient(circle, #ffffff 0%, #f1f3f4 100%); z-index: 2000;
+            background: radial-gradient(circle, #ffffff 0%, #f0f0f0 100%); z-index: 2000;
         }
-        .container { text-align: center; max-width: 450px; padding: 40px; }
-        h1 { font-weight: 400; color: #202124; font-size: 28px; margin-bottom: 12px; }
-        p { color: #5f6368; font-size: 16px; line-height: 1.6; margin-bottom: 32px; }
         .btn {
-            background: #1a73e8; color: white; border: none; padding: 18px 48px;
-            border-radius: 100px; font-size: 18px; font-weight: 500; cursor: pointer;
-            box-shadow: 0 4px 6px rgba(66,133,244,0.3); transition: all 0.3s;
+            background: #1a73e8; color: white; border: none; padding: 24px 48px;
+            border-radius: 100px; font-size: 22px; font-weight: 500; cursor: pointer;
+            box-shadow: 0 8px 24px rgba(26,115,232,0.3); transition: all 0.3s ease;
         }
-        .btn:hover { background: #1765cc; transform: translateY(-2px); box-shadow: 0 8px 12px rgba(66,133,244,0.4); }
+        .btn:active { transform: scale(0.95); box-shadow: 0 4px 12px rgba(26,115,232,0.2); }
     </style>
 </head>
 <body>
     <div id="overlay">
-        <div class="container">
-            <h1>空間ハンドトラッキング</h1>
-            <p>最高峰の精度を実現するため、VRモード開始後に目の前のモニターを見て腕を伸ばしてください。</p>
-            <button class="btn" id="start-btn">VR体験を開始</button>
-        </div>
+        <button class="btn" id="start-btn">VR体験を開始</button>
     </div>
     <video id="input_video" playsinline></video>
 
     <script type="module">
         import { VRButton } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/webxr/VRButton.js';
 
-        let scene, camera, renderer, world, cubeMesh, cubeBody, deskGroup, monitorGroup;
-        let calibRing, isCalibrated = false, calibCount = 0, accumZ = 0;
+        let scene, camera, renderer, world, cubeMesh, cubeBody, deskGroup;
+        let calibRing, isCalibrated = false;
+        let calibCount = 0, accumZ = 0;
 
         const CONFIG = {
-            handSpread: 1.6, handVertical: 1.6, handDepth: 4.5, zOffset: -0.15,
-            lerpFactor: 0.75, // 追従の滑らかさ
-            fingerRadius: 0.014
+            handSpread: 1.6,
+            handVertical: 1.6,
+            handDepth: 4.5, // キャリブレーションで動的に上書き
+            zOffset: -0.25,
+            smoothing: 0.15, // 指数移動平均の重み (0-1, 小さいほど滑らか)
+            targetZ: -0.6    // キャリブレーションターゲットの物理距離
         };
 
         const fingers = [];
-        const _v = new THREE.Vector3();
         const dt = 1/60;
+        const _tempV = new THREE.Vector3();
 
         async function init() {
-            document.getElementById('overlay').style.opacity = '0';
-            setTimeout(() => document.getElementById('overlay').remove(), 500);
+            document.getElementById('overlay').remove();
 
+            // --- Engine Setup ---
             scene = new THREE.Scene();
-            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 100);
+            scene.background = new THREE.Color(0x0a0a0a);
             
+            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 100);
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "high-performance" });
-            renderer.setPixelRatio(window.devicePixelRatio);
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.xr.enabled = true;
+            renderer.shadowMap.enabled = true;
             document.body.appendChild(renderer.domElement);
             document.body.appendChild(VRButton.createButton(renderer));
 
-            // --- Physics Setup ---
+            // --- Physics ---
             world = new CANNON.World();
-            world.gravity.set(0, -9.82, 0);
-            world.solver.iterations = 15; // 精度向上
-
+            world.gravity.set(0, -9.8, 0);
+            world.solver.iterations = 10;
             const handMat = new CANNON.Material("hand");
-            const objMat = new CANNON.Material("object");
-            world.addContactMaterial(new CANNON.ContactMaterial(handMat, objMat, { friction: 0.5, restitution: 0.2 }));
+            const objMat = new CANNON.Material("obj");
+            world.addContactMaterial(new CANNON.ContactMaterial(handMat, objMat, { friction: 0.4, restitution: 0.1 }));
 
-            // --- Calibration UI (In-VR) ---
-            monitorGroup = new THREE.Group();
-            const video = document.getElementById('input_video');
-            const videoTex = new THREE.VideoTexture(video);
-            const monitor = new THREE.Mesh(
-                new THREE.PlaneGeometry(0.5, 0.28),
-                new THREE.MeshBasicMaterial({ map: videoTex, side: THREE.DoubleSide })
+            // --- Calibration Ring ---
+            calibRing = new THREE.Group();
+            const ringMain = new THREE.Mesh(
+                new THREE.TorusGeometry(0.12, 0.006, 16, 100),
+                new THREE.MeshBasicMaterial({ color: 0x4285F4, transparent: true, opacity: 0.8 })
             );
-            const frame = new THREE.Mesh(
-                new THREE.PlaneGeometry(0.52, 0.30),
-                new THREE.MeshBasicMaterial({ color: 0x202124 })
-            );
-            frame.position.z = -0.001;
-            monitorGroup.add(monitor, frame);
-            monitorGroup.position.set(0, 1.0, -0.6);
-            scene.add(monitorGroup);
-
-            // ターゲット中心のレティクル
-            const reticle = new THREE.Mesh(
-                new THREE.RingGeometry(0.01, 0.015, 32),
-                new THREE.MeshBasicMaterial({ color: 0xea4335 })
-            );
-            reticle.position.set(0, 1.0, -0.59);
-            monitorGroup.add(reticle);
-
-            calibRing = new THREE.Mesh(
-                new THREE.TorusGeometry(0.12, 0.008, 16, 100),
-                new THREE.MeshStandardMaterial({ color: 0x4285f4, emissive: 0x4285f4, emissiveIntensity: 0.5 })
-            );
-            calibRing.position.set(0, 1.4, -0.7);
+            calibRing.add(ringMain);
+            calibRing.position.set(0, 1.3, CONFIG.targetZ);
             scene.add(calibRing);
 
-            // --- Desk & Object ---
+            // --- Stage Assets ---
             deskGroup = new THREE.Group();
-            const desk = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.05, 0.6), new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.1 }));
-            desk.position.set(0, 0.9, -0.6);
-            deskGroup.add(desk);
+            const deskBase = new THREE.Mesh(
+                new THREE.BoxGeometry(1.2, 0.05, 0.6),
+                new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.1 })
+            );
+            deskBase.position.set(0, 0.9, -0.5);
+            deskBase.receiveShadow = true;
+            deskGroup.add(deskBase);
             scene.add(deskGroup);
             deskGroup.visible = false;
 
-            const dBody = new CANNON.Body({ mass: 0, material: objMat });
-            dBody.addShape(new CANNON.Box(new CANNON.Vec3(0.6, 0.025, 0.3)));
-            dBody.position.set(0, 0.9, -0.6);
-            world.addBody(dBody);
+            const deskBody = new CANNON.Body({ mass: 0, material: objMat });
+            deskBody.addShape(new CANNON.Box(new CANNON.Vec3(0.6, 0.025, 0.3)));
+            deskBody.position.copy(deskBase.position);
+            world.addBody(deskBody);
 
-            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.08), new THREE.MeshStandardMaterial({ color: 0x1a73e8 }));
-            cubeMesh.visible = false;
+            cubeMesh = new THREE.Mesh(
+                new THREE.BoxGeometry(0.08, 0.08, 0.08),
+                new THREE.MeshStandardMaterial({ color: 0x1a73e8, metalness: 0.1, roughness: 0.2 })
+            );
+            cubeMesh.castShadow = true;
             scene.add(cubeMesh);
-            cubeBody = new CANNON.Body({ mass: 0.5, material: objMat, linearDamping: 0.2 });
+            cubeMesh.visible = false;
+
+            cubeBody = new CANNON.Body({ mass: 0.2, material: objMat, linearDamping: 0.3, angularDamping: 0.3 });
             cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.04, 0.04, 0.04)));
-            cubeBody.position.set(0, 1.2, -0.6);
+            cubeBody.position.set(0, 1.2, -0.5);
             world.addBody(cubeBody);
 
-            // --- Advanced Hand Visuals ---
-            const fMat = new THREE.MeshStandardMaterial({ color: 0x00ff00, emissive: 0x00ff00, emissiveIntensity: 0.8, transparent: true, opacity: 0.9 });
+            // --- Pro-Visual Hands ---
+            const fingerGeo = new THREE.SphereGeometry(0.014, 24, 24);
+            const fingerMat = new THREE.MeshStandardMaterial({ 
+                color: 0x39ff14, emissive: 0x39ff14, emissiveIntensity: 0.5, roughness: 0 
+            });
             for (let i = 0; i < 21; i++) {
-                const m = new THREE.Mesh(new THREE.SphereGeometry(CONFIG.fingerRadius, 16, 16), fMat);
-                scene.add(m);
-                const b = new CANNON.Body({ mass: 0, material: handMat, type: CANNON.Body.KINEMATIC });
-                b.addShape(new CANNON.Sphere(CONFIG.fingerRadius));
-                world.addBody(b);
-                fingers.push({ mesh: m, body: b });
+                const mesh = new THREE.Mesh(fingerGeo, fingerMat);
+                scene.add(mesh);
+                const body = new CANNON.Body({ mass: 0, material: handMat, type: CANNON.Body.KINEMATIC });
+                body.addShape(new CANNON.Sphere(0.014));
+                world.addBody(body);
+                fingers.push({ mesh, body, lastPos: new THREE.Vector3() });
             }
 
-            scene.add(new THREE.AmbientLight(0xffffff, 1.0));
-            const light = new THREE.PointLight(0xffffff, 0.5);
-            light.position.set(0, 2, 0);
-            scene.add(light);
+            // --- Lighting ---
+            scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+            const spot = new THREE.SpotLight(0xffffff, 0.8);
+            spot.position.set(0, 3, 1);
+            spot.castShadow = true;
+            scene.add(spot);
 
             // --- Hand Tracking Logic ---
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
-            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.8, minTrackingConfidence: 0.8 });
+            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.75, minTrackingConfidence: 0.75 });
 
-            hands.onResults((res) => {
-                if (!res.multiHandLandmarks?.length) return;
-                const marks = res.multiHandLandmarks[0];
-                const xrCam = renderer.xr.getCamera(camera);
+            hands.onResults((results) => {
+                if (!results.multiHandLandmarks?.length) {
+                    if(!isCalibrated) {
+                        calibRing.scale.setScalar(1 + Math.sin(Date.now() * 0.004) * 0.05);
+                        calibCount = 0;
+                    }
+                    return;
+                }
 
+                const landmarks = results.multiHandLandmarks[0];
+                const wrist = landmarks[0];
+                const xrCamera = renderer.xr.getCamera(camera);
+
+                // Calibration Logic
                 if (!isCalibrated && renderer.xr.isPresenting) {
-                    const wrist = marks[0];
-                    const hit = Math.abs(wrist.x - 0.5) < 0.15 && Math.abs(wrist.y - 0.5) < 0.15;
-                    
-                    if (hit) {
+                    const inTarget = Math.abs(wrist.x - 0.5) < 0.18 && Math.abs(wrist.y - 0.5) < 0.18;
+                    if (inTarget) {
                         calibCount++;
                         accumZ += Math.abs(wrist.z);
-                        const p = Math.min(calibCount / 60, 1);
-                        calibRing.material.emissive.setHex(0x34a853);
-                        calibRing.scale.set(1-p*0.5, 1-p*0.5, 1);
+                        const p = calibCount / 60;
+                        ringMain.material.color.lerpColors(new THREE.Color(0x4285F4), new THREE.Color(0x39ff14), 0.1);
+                        calibRing.scale.setScalar(1 - p * 0.3);
+                        calibRing.rotation.z += 0.1;
+
                         if (calibCount > 60) {
-                            CONFIG.handDepth = 0.7 / (accumZ / calibCount);
+                            CONFIG.handDepth = Math.abs(CONFIG.targetZ) / (accumZ / calibCount || 0.1);
                             isCalibrated = true;
-                            monitorGroup.visible = calibRing.visible = false;
-                            deskGroup.visible = cubeMesh.visible = true;
+                            // Cinema transition
+                            calibRing.visible = false;
+                            deskGroup.visible = true;
+                            cubeMesh.visible = true;
                         }
                     } else {
                         calibCount = 0; accumZ = 0;
-                        calibRing.material.emissive.setHex(0x4285f4);
+                        ringMain.material.color.set(0x4285F4);
                     }
                 }
 
-                marks.forEach((pt, i) => {
+                // High-End Position Mapping with EMA Smoothing
+                landmarks.forEach((point, i) => {
                     const f = fingers[i];
-                    _v.set((pt.x - 0.5) * CONFIG.handSpread, -(pt.y - 0.5) * CONFIG.handVertical, -pt.z * CONFIG.handDepth + CONFIG.zOffset);
-                    _v.applyQuaternion(xrCam.quaternion).add(xrCam.position);
-                    f.body.position.lerp(new CANNON.Vec3(_v.x, _v.y, _v.z), CONFIG.lerpFactor, f.body.position);
-                    f.mesh.position.copy(f.body.position);
+                    _tempV.set(
+                        (point.x - 0.5) * CONFIG.handSpread,
+                        -(point.y - 0.5) * CONFIG.handVertical,
+                        -point.z * CONFIG.handDepth + CONFIG.zOffset
+                    );
+                    _tempV.applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
+
+                    // Smoothing filter
+                    f.lastPos.lerp(_tempV, CONFIG.smoothing);
+                    
+                    f.body.position.set(f.lastPos.x, f.lastPos.y, f.lastPos.z);
+                    f.mesh.position.copy(f.lastPos);
                 });
             });
 
-            new Camera(video, { onFrame: async () => await hands.send({ image: video }), width: 1280, height: 720 }).start();
+            const video = document.getElementById('input_video');
+            new Camera(video, {
+                onFrame: async () => { await hands.send({ image: video }); },
+                facingMode: "environment", width: 1280, height: 720
+            }).start();
 
             renderer.setAnimationLoop(() => {
                 if (isCalibrated) {
                     world.step(dt);
                     cubeMesh.position.copy(cubeBody.position);
                     cubeMesh.quaternion.copy(cubeBody.quaternion);
+                    
+                    // アニメーション効果: 机が少し揺れるのを防ぐ
+                    if(cubeBody.position.y < 0.8) cubeBody.position.y = 0.95;
                 }
                 renderer.render(scene, camera);
             });
