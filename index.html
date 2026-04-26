@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>VR Hand Tracker - Fixed Aspect & Reach</title>
+    <title>VR Hand Tracker - Rear Camera & Correct Aspect</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
@@ -21,7 +21,7 @@
 </head>
 <body>
     <div id="vr-ui">
-        <button class="btn" id="start-btn">START VR MODE</button>
+        <button class="btn" id="start-btn">START VR (REAR CAMERA)</button>
     </div>
     <video id="input_video" playsinline></video>
 
@@ -29,7 +29,7 @@
         import { VRButton } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/webxr/VRButton.js';
 
         let scene, camera, renderer, world, cubeMesh, cubeBody, deskGroup, videoTexture;
-        let calibRing, monitor, instrMesh;
+        let calibRing, monitor;
         let isCalibrated = false;
         let calibCount = 0;
         let maxReachZ = 0;
@@ -42,12 +42,12 @@
             const canvas = document.createElement('canvas');
             const ctx = canvas.getContext('2d');
             canvas.width = 512; canvas.height = 128;
-            ctx.fillStyle = 'rgba(0,0,0,0.7)';
+            ctx.fillStyle = 'rgba(0,0,0,0.8)';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
-            ctx.font = 'bold 40px Arial';
+            ctx.font = 'bold 44px Arial';
             ctx.fillStyle = '#ffffff';
             ctx.textAlign = 'center';
-            ctx.fillText(text, 256, 75);
+            ctx.fillText(text, 256, 80);
             return new THREE.CanvasTexture(canvas);
         }
 
@@ -65,38 +65,36 @@
             const video = document.getElementById('input_video');
             videoTexture = new THREE.VideoTexture(video);
 
-            // --- モニターの初期設定 (VR開始後に比率を修正する) ---
-            const monitorGeo = new THREE.PlaneGeometry(0.4, 0.225); 
+            // VR空間内モニター
+            const monitorGeo = new THREE.PlaneGeometry(0.5, 0.5); 
             const monitorMat = new THREE.MeshBasicMaterial({ map: videoTexture });
             monitor = new THREE.Mesh(monitorGeo, monitorMat);
-            monitor.position.set(0, 0.8, -0.6);
+            monitor.position.set(0, 0.8, -0.7);
             scene.add(monitor);
 
             // 指示テキスト
-            instrMesh = new THREE.Mesh(
-                new THREE.PlaneGeometry(0.4, 0.1),
-                new THREE.MeshBasicMaterial({ map: createTextTexture("EXTEND ARM FULLY"), transparent: true })
+            const instrMesh = new THREE.Mesh(
+                new THREE.PlaneGeometry(0.5, 0.125),
+                new THREE.MeshBasicMaterial({ map: createTextTexture("EXTEND YOUR ARM"), transparent: true })
             );
-            instrMesh.position.set(0, 0.18, 0.01);
+            instrMesh.position.set(0, 0.35, 0.01);
             monitor.add(instrMesh);
 
-            // Calibration Ring
             calibRing = new THREE.Mesh(
-                new THREE.TorusGeometry(0.06, 0.004, 16, 100),
+                new THREE.TorusGeometry(0.06, 0.005, 16, 100),
                 new THREE.MeshBasicMaterial({ color: 0x1a73e8 })
             );
             calibRing.position.set(0, 0, 0.01);
             monitor.add(calibRing);
 
-            // Physics
+            // Physics & Objects
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
             const handMat = new CANNON.Material();
             const objectMat = new CANNON.Material();
 
-            // Objects
             deskGroup = new THREE.Group();
-            const deskMesh = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.05, 0.6), new THREE.MeshStandardMaterial({ color: 0x444444 }));
+            const deskMesh = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.05, 0.6), new THREE.MeshStandardMaterial({ color: 0x555555 }));
             deskMesh.position.set(0, 0.7, -0.5);
             deskGroup.add(deskMesh);
             scene.add(deskGroup);
@@ -115,7 +113,6 @@
             cubeBody.position.set(0, 1.0, -0.5);
             world.addBody(cubeBody);
 
-            // Fingers
             for (let i = 0; i < 21; i++) {
                 const mesh = new THREE.Mesh(new THREE.SphereGeometry(SCALE_CONFIG.fingerRadius, 16, 16), new THREE.MeshStandardMaterial({ color: 0x39ff14 }));
                 scene.add(mesh);
@@ -131,10 +128,10 @@
             hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
 
             hands.onResults((results) => {
-                // VRモード中のアスペクト比補正
-                if (video.videoWidth > 0 && monitor.scale.x === 1) {
+                // VR内モニターの比率修正（外カメラの解像度に基づく）
+                if (video.videoWidth > 0 && monitor.scale.x === 1 && monitor.scale.y === 1) {
                     const aspect = video.videoWidth / video.videoHeight;
-                    monitor.scale.set(aspect / (16/9), 1, 1); 
+                    monitor.scale.set(aspect, 1, 1);
                 }
 
                 if (!results.multiHandLandmarks?.length) return;
@@ -151,8 +148,8 @@
                         calibRing.material.color.lerpColors(new THREE.Color(0x1a73e8), new THREE.Color(0x39ff14), progress);
                         
                         if (calibCount > 60) {
-                            // 腕をピンと伸ばした位置を基準に深度スケールを決定
-                            SCALE_CONFIG.handDepth = 0.8 / (maxReachZ || 0.1); 
+                            // ピンと伸ばした腕の長さを約0.7mとしてスケールを固定
+                            SCALE_CONFIG.handDepth = 0.7 / (maxReachZ || 0.1);
                             isCalibrated = true;
                             monitor.visible = false;
                             deskGroup.visible = true;
@@ -177,10 +174,13 @@
                 });
             });
 
-            new Camera(video, {
+            // 明示的に外カメラ(environment)を指定
+            const cameraUtils = new Camera(video, {
                 onFrame: async () => { await hands.send({ image: video }); },
+                facingMode: "environment",
                 width: 1280, height: 720
-            }).start();
+            });
+            cameraUtils.start();
 
             renderer.setAnimationLoop(() => {
                 if (isCalibrated) {
