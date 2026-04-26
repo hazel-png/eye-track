@@ -32,26 +32,25 @@
         let calibRing, isCalibrated = false;
         let calibCount = 0;
         let maxReachZ = 0;
-        let instructionText;
+        let monitor;
 
-        const SCALE_CONFIG = { handSpread: 1.5, handVertical: 1.5, handDepth: 3.5, zOffset: -0.2, fingerRadius: 0.015 };
+        const SCALE_CONFIG = { handSpread: 1.5, handVertical: 1.5, handDepth: 4.0, zOffset: -0.2, fingerRadius: 0.015 };
         const fingers = [];
         const _v = new THREE.Vector3();
         const dt = 1/60;
 
-        function createTextCanvas(text) {
+        // 英語の指示出し用テクスチャ作成
+        function createInstructionTexture(text) {
             const canvas = document.createElement('canvas');
             const ctx = canvas.getContext('2d');
-            canvas.width = 512;
-            canvas.height = 128;
-            ctx.fillStyle = 'white';
+            canvas.width = 512; canvas.height = 128;
+            ctx.fillStyle = 'rgba(0,0,0,0.5)';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
-            ctx.font = 'bold 32px sans-serif';
-            ctx.fillStyle = 'black';
+            ctx.font = 'bold 32px Arial';
+            ctx.fillStyle = 'white';
             ctx.textAlign = 'center';
-            ctx.fillText(text, 256, 70);
-            const texture = new THREE.CanvasTexture(canvas);
-            return texture;
+            ctx.fillText(text, 256, 75);
+            return new THREE.CanvasTexture(canvas);
         }
 
         async function init() {
@@ -65,44 +64,44 @@
             document.body.appendChild(renderer.domElement);
             document.body.appendChild(VRButton.createButton(renderer));
 
-            // --- Correct Aspect Ratio Monitor ---
             const video = document.getElementById('input_video');
             videoTexture = new THREE.VideoTexture(video);
-            
-            // Get actual video aspect ratio
-            const videoAspect = video.videoWidth / video.videoHeight || 16/9;
+
+            // --- カメラ比率の修正 ---
+            // ビデオの準備ができるまで少し待ち、アスペクト比を計算
+            const videoAspect = video.videoWidth / video.videoHeight || 1.77; 
             const monitorHeight = 0.25;
             const monitorGeo = new THREE.PlaneGeometry(monitorHeight * videoAspect, monitorHeight);
             const monitorMat = new THREE.MeshBasicMaterial({ map: videoTexture });
-            const monitor = new THREE.Mesh(monitorGeo, monitorMat);
-            monitor.position.set(0, 0.8, -0.6);
+            monitor = new THREE.Mesh(monitorGeo, monitorMat);
+            monitor.position.set(0, 0.8, -0.7);
             scene.add(monitor);
 
-            // Instructions Overlay
-            const instrGeo = new THREE.PlaneGeometry(0.4, 0.1);
-            const instrMat = new THREE.MeshBasicMaterial({ map: createTextCanvas("Extend arm fully to calibrate"), transparent: true });
-            instructionText = new THREE.Mesh(instrGeo, instrMat);
-            instructionText.position.set(0, 1.0, -0.6);
-            scene.add(instructionText);
+            // 指示テキストの配置
+            const textPlane = new THREE.Mesh(
+                new THREE.PlaneGeometry(0.5, 0.125),
+                new THREE.MeshBasicMaterial({ map: createInstructionTexture("EXTEND ARM FULLY"), transparent: true })
+            );
+            textPlane.position.set(0, 1.0, -0.7);
+            monitor.add(textPlane); // モニターと一緒に消えるように追加
 
-            // Physics
+            // Calibration Ring
+            calibRing = new THREE.Mesh(
+                new THREE.TorusGeometry(0.08, 0.005, 16, 100),
+                new THREE.MeshBasicMaterial({ color: 0x1a73e8 })
+            );
+            calibRing.position.set(0, 0.8, -0.69);
+            scene.add(calibRing);
+
+            // Physics & Objects
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
             const handMat = new CANNON.Material();
             const objectMat = new CANNON.Material();
             world.addContactMaterial(new CANNON.ContactMaterial(handMat, objectMat, { friction: 1.0, restitution: 0.1 }));
 
-            // Calibration Ring
-            calibRing = new THREE.Mesh(
-                new THREE.TorusGeometry(0.08, 0.008, 16, 100),
-                new THREE.MeshBasicMaterial({ color: 0x1a73e8 })
-            );
-            calibRing.position.set(0, 0.8, -0.59); 
-            scene.add(calibRing);
-
-            // Desk & Cube
             deskGroup = new THREE.Group();
-            const deskMesh = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.05, 0.6), new THREE.MeshStandardMaterial({ color: 0x888888 }));
+            const deskMesh = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.05, 0.6), new THREE.MeshStandardMaterial({ color: 0x444444 }));
             deskMesh.position.set(0, 0.7, -0.5);
             deskGroup.add(deskMesh);
             scene.add(deskGroup);
@@ -122,9 +121,8 @@
             world.addBody(cubeBody);
 
             // Fingers
-            const fingerMat = new THREE.MeshStandardMaterial({ color: 0x39ff14 });
             for (let i = 0; i < 21; i++) {
-                const mesh = new THREE.Mesh(new THREE.SphereGeometry(SCALE_CONFIG.fingerRadius, 16, 16), fingerMat);
+                const mesh = new THREE.Mesh(new THREE.SphereGeometry(SCALE_CONFIG.fingerRadius, 16, 16), new THREE.MeshStandardMaterial({ color: 0x39ff14 }));
                 scene.add(mesh);
                 const body = new CANNON.Body({ mass: 0, material: handMat, type: CANNON.Body.KINEMATIC });
                 body.addShape(new CANNON.Sphere(SCALE_CONFIG.fingerRadius));
@@ -139,30 +137,26 @@
 
             hands.onResults((results) => {
                 if (!results.multiHandLandmarks?.length) return;
-                
                 const landmarks = results.multiHandLandmarks[0];
                 const wrist = landmarks[0];
                 const xrCamera = renderer.xr.getCamera(camera);
 
                 if (!isCalibrated && renderer.xr.isPresenting) {
-                    // Check if hand is roughly centered in camera view
-                    const inTarget = Math.abs(wrist.x - 0.5) < 0.25 && Math.abs(wrist.y - 0.5) < 0.25;
-                    
+                    const inTarget = Math.abs(wrist.x - 0.5) < 0.2 && Math.abs(wrist.y - 0.5) < 0.2;
                     if (inTarget) {
                         calibCount++;
-                        // Capture the furthest Z (closest to camera, largest absolute value in Mediapipe)
+                        // 腕を伸ばした状態のZ値（カメラからの距離）を記録
                         maxReachZ = Math.max(maxReachZ, Math.abs(wrist.z));
                         
                         const progress = Math.min(calibCount / 60, 1);
                         calibRing.material.color.lerpColors(new THREE.Color(0x1a73e8), new THREE.Color(0x39ff14), progress);
                         
                         if (calibCount > 60) {
-                            // Normalize: set reach to roughly 0.7m (arm length) based on maxReachZ
+                            // 最大リーチに基づいてDepthスケールを動的に計算 (約0.7mを標準リーチとする)
                             SCALE_CONFIG.handDepth = 0.7 / (maxReachZ || 0.1);
                             isCalibrated = true;
                             calibRing.visible = false;
                             monitor.visible = false;
-                            instructionText.visible = false;
                             deskGroup.visible = true;
                             cubeMesh.visible = true;
                         }
