@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Visual Sync Spatial Studio - Fixed</title>
+    <title>VR Hand Tracker with Live Feed</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
@@ -16,24 +16,23 @@
             display: flex; align-items: center; justify-content: center;
             background: #fff; z-index: 2000;
         }
-        .btn { background: #1a73e8; color: white; border: none; padding: 20px 40px; border-radius: 50px; font-size: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); cursor: pointer; }
+        .btn { background: #1a73e8; color: white; border: none; padding: 20px 40px; border-radius: 50px; font-size: 20px; cursor: pointer; }
     </style>
 </head>
 <body>
     <div id="vr-ui">
-        <button class="btn" id="start-btn">VRセットアップを開始</button>
+        <button class="btn" id="start-btn">カメラを確認してVRを開始</button>
     </div>
     <video id="input_video" playsinline></video>
 
     <script type="module">
         import { VRButton } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/webxr/VRButton.js';
 
-        let scene, camera, renderer, world, cubeMesh, cubeBody, deskGroup;
+        let scene, camera, renderer, world, cubeMesh, cubeBody, deskGroup, videoTexture;
         let calibRing, isCalibrated = false;
         let calibCount = 0;
         let accumZ = 0;
 
-        // SCALE_CONFIGの初期値を少しマイルドに調整
         const SCALE_CONFIG = { handSpread: 1.5, handVertical: 1.5, handDepth: 4.0, zOffset: -0.2, fingerRadius: 0.015 };
         const fingers = [];
         const _v = new THREE.Vector3();
@@ -50,6 +49,23 @@
             document.body.appendChild(renderer.domElement);
             document.body.appendChild(VRButton.createButton(renderer));
 
+            // --- リアルタイムカメラモニターの作成 ---
+            const video = document.getElementById('input_video');
+            videoTexture = new THREE.VideoTexture(video);
+            const monitorGeo = new THREE.PlaneGeometry(0.4, 0.225); // 16:9比率
+            const monitorMat = new THREE.MeshBasicMaterial({ map: videoTexture });
+            const monitor = new THREE.Mesh(monitorGeo, monitorMat);
+            monitor.position.set(0, 0.9, -0.5); // 目の前、少し下に配置
+            scene.add(monitor);
+
+            // モニター上の「ターゲット中心点」ガイド（赤い点）
+            const centerGuide = new THREE.Mesh(
+                new THREE.CircleGeometry(0.005, 16),
+                new THREE.MeshBasicMaterial({ color: 0xff0000 })
+            );
+            centerGuide.position.set(0, 0.9, -0.49); // モニターの直前に配置
+            scene.add(centerGuide);
+
             // Physics
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
@@ -57,13 +73,15 @@
             const objectMat = new CANNON.Material();
             world.addContactMaterial(new CANNON.ContactMaterial(handMat, objectMat, { friction: 1.0, restitution: 0.1 }));
 
-            // リングのデザインを少し太くして見やすく
-            const ringGeo = new THREE.TorusGeometry(0.12, 0.015, 16, 100);
-            const ringMat = new THREE.MeshBasicMaterial({ color: 0x1a73e8, transparent: true, opacity: 0.8 });
-            calibRing = new THREE.Mesh(ringGeo, ringMat);
+            // Calibration Ring
+            calibRing = new THREE.Mesh(
+                new THREE.TorusGeometry(0.12, 0.015, 16, 100),
+                new THREE.MeshBasicMaterial({ color: 0x1a73e8, transparent: true, opacity: 0.8 })
+            );
             calibRing.position.set(0, 1.3, -0.6); 
             scene.add(calibRing);
 
+            // Desk & Cube
             deskGroup = new THREE.Group();
             const deskMesh = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.05, 0.6), new THREE.MeshStandardMaterial({ color: 0xffffff }));
             deskMesh.position.set(0, 0.95, -0.5);
@@ -84,6 +102,7 @@
             cubeBody.position.set(0, 1.15, -0.5);
             world.addBody(cubeBody);
 
+            // Fingers
             const fingerMat = new THREE.MeshStandardMaterial({ color: 0x39ff14, emissive: 0x39ff14, emissiveIntensity: 0.8 });
             for (let i = 0; i < 21; i++) {
                 const mesh = new THREE.Mesh(new THREE.SphereGeometry(SCALE_CONFIG.fingerRadius, 16, 16), fingerMat);
@@ -96,6 +115,7 @@
 
             scene.add(new THREE.AmbientLight(0xffffff, 1.0));
 
+            // Hand Tracking
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
             hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
 
@@ -113,24 +133,20 @@
                 const xrCamera = renderer.xr.getCamera(camera);
 
                 if (!isCalibrated && renderer.xr.isPresenting) {
-                    // 判定範囲を少し広げました (0.15 -> 0.2)
+                    // 下のモニターの映像を見て、手がモニターの「中心（赤い点）」に重なるようにしてください
                     const inTarget = Math.abs(wrist.x - 0.5) < 0.2 && Math.abs(wrist.y - 0.5) < 0.2;
                     
                     if (inTarget) {
                         calibCount++;
                         accumZ += Math.abs(wrist.z);
-                        
-                        const progress = Math.min(calibCount / 60, 1); // 2秒程度に短縮
+                        const progress = Math.min(calibCount / 60, 1);
                         calibRing.material.color.lerpColors(new THREE.Color(0x1a73e8), new THREE.Color(0x39ff14), progress);
-                        calibRing.scale.set(1 - (progress * 0.4), 1 - (progress * 0.4), 1);
-                        calibRing.rotation.z += 0.1;
-
                         if (calibCount > 60) {
-                            const avgZ = accumZ / calibCount;
-                            // 距離計算の係数を調整
-                            SCALE_CONFIG.handDepth = 0.6 / (avgZ || 0.05); 
+                            SCALE_CONFIG.handDepth = 0.6 / (accumZ / calibCount || 0.05); 
                             isCalibrated = true;
                             calibRing.visible = false;
+                            monitor.visible = false; // モニターも消す
+                            centerGuide.visible = false;
                             deskGroup.visible = true;
                             cubeMesh.visible = true;
                         }
@@ -138,7 +154,6 @@
                         calibCount = 0;
                         accumZ = 0;
                         calibRing.material.color.set(0x1a73e8);
-                        calibRing.scale.set(1 + Math.sin(Date.now() * 0.005) * 0.05, 1 + Math.sin(Date.now() * 0.005) * 0.05, 1);
                     }
                 }
 
@@ -150,24 +165,19 @@
                         -point.z * SCALE_CONFIG.handDepth + SCALE_CONFIG.zOffset
                     );
                     _v.applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
-                    const nextPos = new CANNON.Vec3(_v.x, _v.y, _v.z);
-                    
-                    // 瞬間移動を防ぐために物理ボディを補間
-                    f.body.position.lerp(nextPos, 0.8, f.body.position);
+                    f.body.position.lerp(new CANNON.Vec3(_v.x, _v.y, _v.z), 0.8, f.body.position);
                     f.mesh.position.copy(f.body.position);
                 });
             });
 
-            const video = document.getElementById('input_video');
-            const cameraUtils = new Camera(video, {
+            new Camera(video, {
                 onFrame: async () => { await hands.send({ image: video }); },
                 facingMode: "environment", width: 1280, height: 720
-            });
-            cameraUtils.start();
+            }).start();
 
             renderer.setAnimationLoop(() => {
+                if (isCalibrated) world.step(dt);
                 if (isCalibrated) {
-                    world.step(dt);
                     cubeMesh.position.copy(cubeBody.position);
                     cubeMesh.quaternion.copy(cubeBody.quaternion);
                 }
