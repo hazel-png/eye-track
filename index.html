@@ -3,198 +3,154 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Magic Hands VR - Stable Full</title>
-    
+    <title>Spatial Hands - Vision Pro Style</title>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/cannon@0.6.2/build/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-
     <style>
-        :root { --ios-blue: #007AFF; }
         body { margin: 0; overflow: hidden; background: #000; font-family: -apple-system, sans-serif; }
         #overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             display: flex; align-items: center; justify-content: center;
-            background: radial-gradient(circle at center, #1a1a1a 0%, #000 100%);
-            z-index: 2000; color: white; text-align: center;
+            background: #000; z-index: 2000; transition: opacity 1s;
         }
-        .ios-card {
-            background: rgba(255, 255, 255, 0.1); backdrop-filter: blur(20px);
-            padding: 30px; border-radius: 30px; border: 1px solid rgba(255, 255, 255, 0.1);
+        .start-card {
+            background: rgba(255, 255, 255, 0.1); backdrop-filter: blur(30px);
+            padding: 40px; border-radius: 40px; text-align: center; color: white;
+            border: 1px solid rgba(255, 255, 255, 0.2);
         }
         .ios-btn {
-            background: var(--ios-blue); color: white; border: none; padding: 18px 40px;
-            border-radius: 15px; font-size: 18px; font-weight: 600; cursor: pointer;
+            background: #fff; color: #000; border: none; padding: 15px 40px;
+            border-radius: 30px; font-size: 18px; font-weight: 600; cursor: pointer;
         }
         #input_video { display: none; }
     </style>
 </head>
 <body>
-
     <div id="overlay">
-        <div class="ios-card">
-            <h2>Magic Hands VR</h2>
-            <p style="opacity: 0.7;">ボタンを押してVRを開始</p>
-            <button class="ios-btn" id="start-btn">Start Session</button>
+        <div class="start-card">
+            <h1 style="font-weight: 300; letter-spacing: 2px;">Spatial Studio</h1>
+            <p style="opacity: 0.6; margin-bottom: 30px;">手を前にかざして開始します</p>
+            <button class="ios-btn" id="start-btn">入室する</button>
         </div>
     </div>
-
     <video id="input_video" playsinline></video>
 
     <script type="module">
-        // VRButtonはmodule形式で読み込む必要があるため、ライブラリの後に定義
         import { VRButton } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/webxr/VRButton.js';
 
-        // 全体設定
-        const CONFIG = { sensitivity: 3.8, power: 0.85, baseOffset: -0.5, lerp: 0.35 };
-        let scene, camera, renderer, world, cubeMesh, cubeBody;
-        let calibSphere, isCalibrating = false, calibComplete = false;
-        let isHandVisible = false, maxReachZ = 0.15, currentRawZ = 0;
+        let scene, camera, renderer, calibSphere;
+        let isHandActive = false, calibComplete = false;
+        let maxReachZ = 0.15;
         const fingers = [];
-        const dt = 1/60;
 
         function vibrate(ms) { if (navigator.vibrate) navigator.vibrate(ms); }
 
         async function init() {
-            // オーバーレイを削除
-            const overlay = document.getElementById('overlay');
-            if (overlay) overlay.remove();
+            document.getElementById('overlay').style.opacity = '0';
+            setTimeout(() => document.getElementById('overlay').remove(), 1000);
 
-            // --- Three.js & Physics ---
             scene = new THREE.Scene();
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 100);
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
             document.body.appendChild(VRButton.createButton(renderer));
 
-            world = new CANNON.World();
-            world.gravity.set(0, -9.8, 0);
-
-            // キャリブターゲット
-            calibSphere = new THREE.Mesh(
-                new THREE.SphereGeometry(0.08, 32, 32),
-                new THREE.MeshStandardMaterial({ color: 0x007AFF, transparent: true, opacity: 0.2 })
-            );
-            calibSphere.position.set(0, 1.25, -0.4);
+            // キャリブレーションガイド（最初は非表示）
+            const sphereGeo = new THREE.SphereGeometry(0.06, 32, 32);
+            const sphereMat = new THREE.MeshStandardMaterial({ 
+                color: 0xffffff, transparent: true, opacity: 0, emissive: 0xffffff, emissiveIntensity: 0.5 
+            });
+            calibSphere = new THREE.Mesh(sphereGeo, sphereMat);
+            calibSphere.position.set(0, 1.2, -0.4);
             scene.add(calibSphere);
 
-            // 立方体
-            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.12), new THREE.MeshStandardMaterial({ color: 0xffffff }));
-            cubeMesh.visible = false;
-            scene.add(cubeMesh);
-            cubeBody = new CANNON.Body({ mass: 0.5 });
-            cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.06, 0.06, 0.06)));
-            cubeBody.position.set(0, 1.5, -0.6);
-            world.addBody(cubeBody);
+            scene.add(new THREE.AmbientLight(0xffffff, 0.8));
 
-            // 【振動】手と物体が触れたら震える
-            cubeBody.addEventListener("collide", (e) => {
-                const vel = e.contact.getImpactVelocityAlongNormal();
-                vibrate(Math.min(vel * 15, 25)); // 衝撃に応じた軽い振動
-            });
-
-            scene.add(new THREE.AmbientLight(0xffffff, 1.2));
-
-            // 21箇所の指パーツ
+            // 指のパーツ（Vision Proのようなクリーンな白い点）
             for (let i = 0; i < 21; i++) {
-                const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.015, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+                const mesh = new THREE.Mesh(
+                    new THREE.SphereGeometry(0.012), 
+                    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0 })
+                );
                 scene.add(mesh);
-                const body = new CANNON.Body({ mass: 0, type: CANNON.Body.KINEMATIC });
-                body.addShape(new CANNON.Sphere(0.015));
-                world.addBody(body);
-                fingers.push({ mesh, body });
+                fingers.push(mesh);
             }
 
-            // --- MediaPipe Hands ---
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
             hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7 });
 
             hands.onResults((results) => {
                 const xrCamera = renderer.xr.getCamera(camera);
+                
                 if (!results.multiHandLandmarks?.length) {
-                    if (isHandVisible) isHandVisible = false;
-                    fingers.forEach(f => f.body.position.set(0, -100, 0)); // 画面外へ
+                    // 手が消えたらフェードアウト
+                    if (isHandActive) {
+                        isHandActive = false;
+                        fingers.forEach(f => f.material.opacity = 0);
+                        if (!calibComplete) calibSphere.material.opacity = 0;
+                    }
                     return;
                 }
 
-                if (!isHandVisible) {
-                    isHandVisible = true;
-                    vibrate(20); // 認識時のフィードバック
+                // 【Vision Pro風】手を認識した瞬間の演出
+                if (!isHandActive) {
+                    isHandActive = true;
+                    vibrate(10); // 軽い「カチッ」という感触
+                    fingers.forEach(f => f.material.opacity = 0.8);
+                    if (!calibComplete) calibSphere.material.opacity = 0.3;
                 }
 
                 const landmarks = results.multiHandLandmarks[0];
-                currentRawZ = landmarks[0].z;
-
-                // 手のひら重心
-                const p1 = landmarks[5], p2 = landmarks[9], p3 = landmarks[13], p4 = landmarks[17];
-                const palmCenter = {
-                    x: (p1.x + p2.x + p3.x + p4.x) / 4,
-                    y: (p1.y + p2.y + p3.y + p4.y) / 4,
-                    z: (p1.z + p2.z + p3.z + p4.z) / 4
-                };
-
-                let adjustedZ = calibComplete 
-                    ? Math.pow(Math.abs(palmCenter.z) / maxReachZ, CONFIG.power) * CONFIG.sensitivity 
-                    : Math.abs(palmCenter.z) * 5.0;
-
                 landmarks.forEach((point, i) => {
-                    const f = fingers[i];
-                    const _v = new THREE.Vector3(
-                        (palmCenter.x - 0.5) * 2.2 + (point.x - palmCenter.x) * 1.8,
-                        -(palmCenter.y - 0.5) * 2.2 - (point.y - palmCenter.y) * 1.8,
-                        -adjustedZ + (point.z - palmCenter.z) * 1.5 + CONFIG.baseOffset
-                    );
+                    // 奥行き感度をVision Pro風に深く設定
+                    const zPos = -point.z * 5.0 - 0.4; 
+                    const _v = new THREE.Vector3((point.x - 0.5) * 2.5, -(point.y - 0.5) * 2.5, zPos);
                     _v.applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
-                    
-                    f.body.position.x += (_v.x - f.body.position.x) * CONFIG.lerp;
-                    f.body.position.y += (_v.y - f.body.position.y) * CONFIG.lerp;
-                    f.body.position.z += (_v.z - f.body.position.z) * CONFIG.lerp;
-                    f.mesh.position.copy(f.body.position);
+                    fingers[i].position.lerp(_v, 0.4); // 滑らかな追従
                 });
 
-                if (!calibComplete && !isCalibrating) {
-                    if (fingers[8].body.position.distanceTo(calibSphere.position) < 0.15) startCalib();
+                // キャリブレーション判定
+                if (!calibComplete) {
+                    const dist = fingers[8].position.distanceTo(calibSphere.position);
+                    if (dist < 0.12) {
+                        startSpatialCalibration(landmarks[0].z);
+                    }
                 }
             });
 
-            const video = document.getElementById('input_video');
-            const cameraUtils = new Camera(video, {
-                onFrame: async () => { await hands.send({ image: video }); },
+            const cameraUtils = new Camera(document.getElementById('input_video'), {
+                onFrame: async () => { await hands.send({ image: document.getElementById('input_video') }); },
                 facingMode: "environment", width: 1280, height: 720
             });
             cameraUtils.start();
 
-            renderer.setAnimationLoop(() => {
-                world.step(dt);
-                if (calibComplete) {
-                    cubeMesh.position.copy(cubeBody.position);
-                    cubeMesh.quaternion.copy(cubeBody.quaternion);
+            renderer.setAnimationLoop(() => renderer.render(scene, camera));
+        }
+
+        function startSpatialCalibration(zValue) {
+            calibComplete = true; // 二重発動防止
+            vibrate([20, 50, 20]); // 成功の鼓動
+            calibSphere.material.color.set(0x00ff00);
+            
+            // 空間が広がるようなアニメーション
+            let tl = 0;
+            const anim = setInterval(() => {
+                tl += 0.05;
+                calibSphere.scale.set(1 + tl*2, 1 + tl*2, 1 + tl*2);
+                calibSphere.material.opacity = 0.3 - (tl * 0.3);
+                if (tl >= 1) {
+                    clearInterval(anim);
+                    calibSphere.visible = false;
+                    maxReachZ = Math.abs(zValue);
+                    console.log("Calibrated:", maxReachZ);
                 }
-                renderer.render(scene, camera);
-            });
+            }, 30);
         }
 
-        function startCalib() {
-            isCalibrating = true;
-            vibrate(15);
-            calibSphere.material.color.set(0x34C759); // Green
-            setTimeout(() => {
-                maxReachZ = Math.abs(currentRawZ);
-                calibComplete = true;
-                calibSphere.visible = false;
-                cubeMesh.visible = true;
-                vibrate([40, 30, 40]);
-            }, 2000);
-        }
-
-        // --- 実行のタイミングを制御 ---
-        window.addEventListener('load', () => {
-            const btn = document.getElementById('start-btn');
-            if (btn) btn.addEventListener('click', init);
-        });
+        document.getElementById('start-btn').addEventListener('click', init);
     </script>
 </body>
 </html>
