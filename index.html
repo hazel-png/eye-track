@@ -2,19 +2,35 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Stable VR Hands - Final Diagnostic</title>
+    <title>Stable VR Hands - Safe Start</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r150/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; }
+        body { margin: 0; overflow: hidden; background: #111; font-family: sans-serif; }
         video { display: none; }
-        #vr-btn-idx { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 10; }
+        /* Setup Screen */
+        #setup-ui {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            background: #222; color: white; z-index: 1000;
+        }
+        .start-btn {
+            padding: 20px 40px; font-size: 20px; cursor: pointer;
+            background: #1a73e8; color: white; border: none; border-radius: 50px;
+        }
+        #vr-btn-container { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 10; }
     </style>
 </head>
 <body>
-    <div id="vr-btn-idx"></div>
+    <div id="setup-ui">
+        <h1>Hand Tracking VR</h1>
+        <p>Camera & VR permission required.</p>
+        <button class="start-btn" id="activate-btn">START CAMERA</button>
+    </div>
+
+    <div id="vr-btn-container"></div>
     <video id="input_video" playsinline></video>
 
     <script type="module">
@@ -24,30 +40,32 @@
         let isCalibrated = false, calibCount = 0, referenceZ = 0;
         let lastStableZ = 0;
         const tipMeshes = [], tipBodies = [];
-
         const CONFIG = { spread: 1.8, vertical: 1.5, zOffset: -0.25, lerp: 0.3 };
         const _v = new THREE.Vector3();
 
-        async function init() {
+        async function startSystem() {
+            // Hide setup UI
+            document.getElementById('setup-ui').style.display = 'none';
+
+            // --- Init Three.js ---
             scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x222222); 
-            scene.add(new THREE.GridHelper(20, 20, 0x555555, 0x333333));
+            scene.background = new THREE.Color(0x050505);
+            scene.add(new THREE.GridHelper(20, 20, 0x444444, 0x222222));
 
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.01, 100);
-
-            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
-            document.getElementById('vr-btn-idx').appendChild(VRButton.createButton(renderer));
+
+            // Add VR Button
+            document.getElementById('vr-btn-container').appendChild(VRButton.createButton(renderer));
 
             scene.add(new THREE.AmbientLight(0xffffff, 1.0));
 
-            // Physics
+            // --- Init Physics ---
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
-            
-            // Target Cube
             cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.2), new THREE.MeshStandardMaterial({ color: 0x00ffaa }));
             scene.add(cubeMesh);
             cubeBody = new CANNON.Body({ mass: 0.1 });
@@ -55,7 +73,6 @@
             cubeBody.position.set(0, 1.6, -0.6);
             world.addBody(cubeBody);
 
-            // Hand Spheres (Low Poly)
             const jGeo = new THREE.SphereGeometry(0.015, 8, 4);
             for (let i = 0; i < 21; i++) {
                 const m = new THREE.Mesh(jGeo, new THREE.MeshBasicMaterial({ color: 0xffffff }));
@@ -67,16 +84,13 @@
                 tipBodies.push(b);
             }
 
-            // Hand Tracking Logic
+            // --- Init MediaPipe ---
+            const video = document.getElementById('input_video');
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
             hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
 
             hands.onResults((results) => {
                 if (!results.multiHandLandmarks?.length) return;
-                
-                // Signal: hand detected (Change background slightly)
-                if (!isCalibrated) scene.background.set(0x334433); 
-
                 const lm = results.multiHandLandmarks[0];
                 const xrCamera = renderer.xr.getCamera(camera);
                 const palmAvgZ = (lm[5].z + lm[9].z + lm[13].z + lm[17].z) * 0.25;
@@ -84,10 +98,7 @@
                 if (!isCalibrated && renderer.xr.isPresenting) {
                     calibCount++;
                     referenceZ = Math.max(referenceZ, Math.abs(palmAvgZ));
-                    if (calibCount > 40) {
-                        isCalibrated = true;
-                        scene.background.set(0x050505); // Back to dark
-                    }
+                    if (calibCount > 40) isCalibrated = true;
                     return;
                 }
 
@@ -112,12 +123,12 @@
                 }
             });
 
-            const video = document.getElementById('input_video');
+            // Start Camera (Triggered by button click)
             const cameraUtils = new Camera(video, {
                 onFrame: async () => { await hands.send({ image: video }); },
                 facingMode: "environment", width: 640, height: 360
             });
-            cameraUtils.start();
+            await cameraUtils.start();
 
             renderer.setAnimationLoop(() => {
                 if (isCalibrated) {
@@ -129,7 +140,7 @@
             });
         }
 
-        init();
+        document.getElementById('activate-btn').addEventListener('click', startSystem);
     </script>
 </body>
 </html>
