@@ -2,20 +2,23 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Native WebXR Physics VR - Ultimate Stable Hands</title>
+    <title>Fixed Stable VR Hands</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r150/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; }
+        body { margin: 0; overflow: hidden; background: #222; }
         video { display: none; }
+        #vr-button-container { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 999; }
     </style>
 </head>
 <body>
+    <div id="vr-button-container"></div>
     <video id="input_video" playsinline></video>
 
     <script type="module">
+        // Import VRButton as a module
         import { VRButton } from 'https://cdn.jsdelivr.net/npm/three@0.150.0/examples/jsm/webxr/VRButton.js';
 
         let scene, camera, renderer, world, cubeMesh, cubeBody;
@@ -23,11 +26,12 @@
         let lastStableZ = 0;
         const tipMeshes = [], tipBodies = [];
 
-        // Stable tracking configs
+        // Stabilized config
         const CONFIG = {
-            spread: 1.8, vertical: 1.5,
+            spread: 1.8,
+            vertical: 1.5,
             zOffset: -0.25,
-            lerp: 0.3 // Smoothing factor
+            lerp: 0.3
         };
 
         const _v = new THREE.Vector3();
@@ -35,18 +39,21 @@
         async function init() {
             // --- 1. Three.js & WebXR Setup ---
             scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x050505);
-            scene.add(new THREE.GridHelper(20, 20, 0x444444, 0x222222));
+            scene.background = new THREE.Color(0x222222); // Brighter gray to confirm rendering
+            scene.add(new THREE.GridHelper(20, 20, 0x888888, 0x444444));
 
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
 
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
             renderer.xr.enabled = true; 
             document.body.appendChild(renderer.domElement);
-            document.body.appendChild(VRButton.createButton(renderer));
+            
+            // Append VR Button to its specific container
+            document.getElementById('vr-button-container').appendChild(VRButton.createButton(renderer));
 
-            scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+            scene.add(new THREE.AmbientLight(0xffffff, 0.8));
             const light = new THREE.DirectionalLight(0xffffff, 1);
             light.position.set(1, 5, 1);
             scene.add(light);
@@ -54,86 +61,83 @@
             // --- 2. Cannon.js (Physics) ---
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
-            const pMat = new CANNON.Material({ friction: 2.0 });
-
-            const groundBody = new CANNON.Body({ mass: 0, material: pMat });
-            groundBody.addShape(new CANNON.Plane());
-            groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
-            world.addBody(groundBody);
 
             cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.2), new THREE.MeshStandardMaterial({ color: 0x00ffaa }));
             scene.add(cubeMesh);
-            cubeBody = new CANNON.Body({ mass: 0.1, material: pMat });
+            cubeBody = new CANNON.Body({ mass: 0.1 });
             cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.1, 0.1, 0.1)));
             cubeBody.position.set(0, 2, -1);
             world.addBody(cubeBody);
 
-            const jGeo = new THREE.SphereGeometry(0.015, 6, 6);
+            // Fingertips (Low Poly)
+            const jGeo = new THREE.SphereGeometry(0.015, 8, 4);
             for (let i = 0; i < 21; i++) {
                 const m = new THREE.Mesh(jGeo, new THREE.MeshBasicMaterial({ color: 0xffffff }));
                 scene.add(m);
                 tipMeshes.push(m);
-                const b = new CANNON.Body({ mass: 0, material: pMat, type: CANNON.Body.KINEMATIC });
+                const b = new CANNON.Body({ mass: 0, type: CANNON.Body.KINEMATIC });
                 b.addShape(new CANNON.Sphere(0.015));
                 world.addBody(b);
                 tipBodies.push(b);
             }
 
-            // --- 3. MediaPipe Tracking Logic (CALIBRATED & STABLE) ---
+            // --- 3. Stable Hand Tracking (Palm Center Logic) ---
+            const videoElement = document.getElementById('input_video');
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
-            hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
+            
+            hands.setOptions({ 
+                maxNumHands: 1, 
+                modelComplexity: 0, 
+                minDetectionConfidence: 0.7, 
+                minTrackingConfidence: 0.7 
+            });
 
             hands.onResults((results) => {
-                if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-                    const lm = results.multiHandLandmarks[0];
-                    const xrCamera = renderer.xr.getCamera(camera);
+                if (!results.multiHandLandmarks?.length) return;
+                const lm = results.multiHandLandmarks[0];
+                const xrCamera = renderer.xr.getCamera(camera);
 
-                    // Anti-Warp: Use palm points (5,9,13,17) instead of wrist(0) to get depth
-                    const palmAvgZ = (lm[5].z + lm[9].z + lm[13].z + lm[17].z) * 0.25;
+                // Anti-Warp: Ignore Wrist(0), Use Palm Average(5,9,13,17)
+                const palmAvgZ = (lm[5].z + lm[9].z + lm[13].z + lm[17].z) * 0.25;
 
-                    // Initial Calibration Loop (Hold arm straight for ~1 second)
-                    if (!isCalibrated && renderer.xr.isPresenting) {
-                        calibCount++;
-                        referenceZ = Math.max(referenceZ, Math.abs(palmAvgZ));
-                        if (calibCount > 60) isCalibrated = true;
-                        return; 
-                    }
+                // Calibrate only inside VR session
+                if (!isCalibrated && renderer.xr.isPresenting) {
+                    calibCount++;
+                    referenceZ = Math.max(referenceZ, Math.abs(palmAvgZ));
+                    if (calibCount > 50) isCalibrated = true;
+                    return;
+                }
 
-                    if (isCalibrated) {
-                        const depthScale = 0.85 / referenceZ;
+                if (isCalibrated) {
+                    const depthScale = 0.85 / referenceZ;
+                    
+                    // Filter Z movement
+                    let targetZ = -palmAvgZ * depthScale;
+                    if (lastStableZ === 0) lastStableZ = targetZ;
+                    targetZ = lastStableZ + (targetZ - lastStableZ) * CONFIG.lerp;
+                    lastStableZ = targetZ;
+
+                    lm.forEach((point, i) => {
+                        const pCorr = 1.0 - (point.z * 0.4);
+                        _v.set(
+                            (point.x - 0.5) * CONFIG.spread * pCorr,
+                            -(point.y - 0.5) * CONFIG.vertical * pCorr,
+                            targetZ + (point.z - palmAvgZ) * depthScale + CONFIG.zOffset
+                        ).applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
                         
-                        // Smooth Depth Movement (Filter out jitter)
-                        let targetZ = -palmAvgZ * depthScale;
-                        if (lastStableZ === 0) lastStableZ = targetZ;
-                        targetZ = lastStableZ + (targetZ - lastStableZ) * CONFIG.lerp;
-                        lastStableZ = targetZ;
-
-                        lm.forEach((point, i) => {
-                            // Perspective Correction for X, Y
-                            const pCorr = 1.0 - (point.z * 0.4);
-                            
-                            const v = new THREE.Vector3(
-                                (point.x - 0.5) * CONFIG.spread * pCorr, 
-                                -(point.y - 0.5) * CONFIG.vertical * pCorr, 
-                                targetZ + (point.z - palmAvgZ) * depthScale + CONFIG.zOffset
-                            ).applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
-                            
-                            // Apply with Lerp for ultimate smoothness
-                            tipBodies[i].position.lerp(new CANNON.Vec3(v.x, v.y, v.z), CONFIG.lerp, tipBodies[i].position);
-                            tipMeshes[i].position.copy(tipBodies[i].position);
-                        });
-                    }
+                        tipBodies[i].position.lerp(new CANNON.Vec3(_v.x, _v.y, _v.z), CONFIG.lerp, tipBodies[i].position);
+                        tipMeshes[i].position.copy(tipBodies[i].position);
+                    });
                 }
             });
 
-            const videoElement = document.getElementById('input_video');
             const cameraUtils = new Camera(videoElement, {
                 onFrame: async () => { await hands.send({ image: videoElement }); },
                 facingMode: "environment", width: 640, height: 360
             });
             cameraUtils.start();
 
-            // WebXR Loop
+            // WebXR render loop (Isolated from tracking logic)
             renderer.setAnimationLoop(() => {
                 if (isCalibrated) {
                     world.step(1/60);
@@ -144,7 +148,8 @@
             });
         }
 
-        init();
+        // Start initialization
+        init().catch(err => console.error("Init failed:", err));
     </script>
 </body>
 </html>
