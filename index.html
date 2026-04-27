@@ -2,21 +2,22 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <title>Fixed Rendering - Stable VR Hands</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r150/three.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <title>Fixed Stable VR Hands</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; }
         video { display: none; }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
 </head>
 <body>
     <video id="input_video" playsinline></video>
 
     <script type="module">
-        import { VRButton } from 'https://cdn.jsdelivr.net/npm/three@0.150.0/examples/jsm/webxr/VRButton.js';
+        // Import Three.js and VRButton from ESM to ensure 'THREE' is defined correctly
+        import * as THREE from 'https://cdn.skypack.dev/three@0.150.0/build/three.module.js';
+        import { VRButton } from 'https://cdn.skypack.dev/three@0.150.0/examples/jsm/webxr/VRButton.js';
 
         let scene, camera, renderer, world, cubeMesh, cubeBody;
         let instrMesh, calibRing;
@@ -28,7 +29,6 @@
             spread: 1.8, vertical: 1.5,
             zOffset: -0.25,
             lerp: 0.35,
-            modelComplex: 0,
             vWidth: 640, vHeight: 360
         };
 
@@ -42,26 +42,28 @@
             ctx.fillStyle = '#00ffcc';
             ctx.textAlign = 'center';
             ctx.fillText(text, 256, 80);
-            return new THREE.CanvasTexture(canvas);
+            const tex = new THREE.CanvasTexture(canvas);
+            return tex;
         }
 
         async function init() {
+            // Scene Setup
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x050505);
             scene.add(new THREE.GridHelper(20, 20, 0x333333, 0x111111));
 
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.01, 100);
             
-            renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true });
+            renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setPixelRatio(window.devicePixelRatio);
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
             document.body.appendChild(VRButton.createButton(renderer));
 
-            scene.add(new THREE.AmbientLight(0xffffff, 1.0)); // Brightened light
+            scene.add(new THREE.AmbientLight(0xffffff, 1.0));
 
-            // UI
+            // Calibration UI
             instrMesh = new THREE.Mesh(
                 new THREE.PlaneGeometry(0.5, 0.12),
                 new THREE.MeshBasicMaterial({ map: createTextCanvas("EXTEND ARM FULLY"), transparent: true })
@@ -76,7 +78,7 @@
             calibRing.position.set(0, 1.2, -0.7);
             scene.add(calibRing);
 
-            // Physics
+            // Physics (Cannon.js)
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
 
@@ -98,10 +100,11 @@
                 tipBodies.push(b);
             }
 
+            // MediaPipe Implementation
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
             hands.setOptions({ 
                 maxNumHands: 1, 
-                modelComplexity: CONFIG.modelComplex, 
+                modelComplexity: 0, 
                 minDetectionConfidence: 0.7, 
                 minTrackingConfidence: 0.7 
             });
@@ -110,6 +113,8 @@
                 if (!results.multiHandLandmarks?.length) return;
                 const lm = results.multiHandLandmarks[0];
                 const xrCamera = renderer.xr.getCamera(camera);
+                
+                // Stable Palm Depth Logic (Anti-Warp)
                 const palmAvgZ = (lm[5].z + lm[9].z + lm[13].z + lm[17].z) * 0.25;
 
                 if (!isCalibrated && renderer.xr.isPresenting) {
@@ -146,18 +151,12 @@
             });
 
             const videoElement = document.getElementById('input_video');
-            // Use MediaPipe's Camera utility for a dedicated requestAnimationFrame loop
             const cameraUtils = new Camera(videoElement, {
-                onFrame: async () => { 
-                    await hands.send({ image: videoElement }); 
-                },
-                facingMode: "environment", 
-                width: CONFIG.vWidth, 
-                height: CONFIG.vHeight
+                onFrame: async () => { await hands.send({ image: videoElement }); },
+                facingMode: "environment", width: CONFIG.vWidth, height: CONFIG.vHeight
             });
             cameraUtils.start();
 
-            // Isolated Render Loop
             renderer.setAnimationLoop(() => {
                 if (isCalibrated) {
                     world.step(1/60);
