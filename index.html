@@ -1,185 +1,139 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
     <meta charset="utf-8">
-    <title>Stable VR Hands - Final Fix</title>
-    <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
-        video { display: none; }
-        #overlay { position: fixed; top: 20px; left: 20px; color: white; z-index: 10; pointer-events: none; }
-    </style>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <title>Native WebXR Physics VR - Ultimate Stable Hands</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r150/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; }
+        video { display: none; }
+    </style>
 </head>
 <body>
-    <div id="overlay">Loading Libraries...</div>
     <video id="input_video" playsinline></video>
 
-    <script>
-        // --- Inline VRButton to avoid module errors ---
-        const VRButton = {
-            createButton(renderer) {
-                const button = document.createElement('button');
-                button.style.position = 'absolute';
-                button.style.bottom = '20px';
-                button.style.left = 'calc(50% - 75px)';
-                button.style.width = '150px';
-                button.style.height = '40px';
-                button.style.background = '#1a73e8';
-                button.style.color = '#fff';
-                button.style.border = 'none';
-                button.style.borderRadius = '20px';
-                button.style.cursor = 'pointer';
-                button.textContent = 'ENTER VR';
-                
-                button.onclick = () => {
-                    if (navigator.xr) {
-                        navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor', 'bounded-floor'] })
-                            .then((session) => renderer.xr.setSession(session));
-                    }
-                };
-                return button;
-            }
-        };
+    <script type="module">
+        import { VRButton } from 'https://cdn.jsdelivr.net/npm/three@0.150.0/examples/jsm/webxr/VRButton.js';
 
         let scene, camera, renderer, world, cubeMesh, cubeBody;
-        let instrMesh, calibRing;
         let isCalibrated = false, calibCount = 0, referenceZ = 0;
         let lastStableZ = 0;
-
         const tipMeshes = [], tipBodies = [];
+
+        // Stable tracking configs
         const CONFIG = {
             spread: 1.8, vertical: 1.5,
             zOffset: -0.25,
-            lerp: 0.3,
-            vWidth: 640, vHeight: 360
+            lerp: 0.3 // Smoothing factor
         };
 
         const _v = new THREE.Vector3();
 
-        function createTextCanvas(text) {
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d');
-            canvas.width = 512; canvas.height = 128;
-            ctx.font = 'bold 40px Arial';
-            ctx.fillStyle = '#00ffcc';
-            ctx.textAlign = 'center';
-            ctx.fillText(text, 256, 80);
-            return new THREE.CanvasTexture(canvas);
-        }
-
         async function init() {
-            document.getElementById('overlay').textContent = 'Initializing VR...';
-
-            // Scene setup
+            // --- 1. Three.js & WebXR Setup ---
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x050505);
-            scene.add(new THREE.GridHelper(20, 20, 0x333333, 0x111111));
+            scene.add(new THREE.GridHelper(20, 20, 0x444444, 0x222222));
 
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.01, 100);
-            
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+
             renderer = new THREE.WebGLRenderer({ antialias: true });
-            renderer.setPixelRatio(window.devicePixelRatio);
             renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.xr.enabled = true;
+            renderer.xr.enabled = true; 
             document.body.appendChild(renderer.domElement);
             document.body.appendChild(VRButton.createButton(renderer));
 
-            scene.add(new THREE.AmbientLight(0xffffff, 1.0));
+            scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+            const light = new THREE.DirectionalLight(0xffffff, 1);
+            light.position.set(1, 5, 1);
+            scene.add(light);
 
-            // UI
-            instrMesh = new THREE.Mesh(
-                new THREE.PlaneGeometry(0.5, 0.12),
-                new THREE.MeshBasicMaterial({ map: createTextCanvas("EXTEND ARM FULLY"), transparent: true })
-            );
-            instrMesh.position.set(0, 1.4, -0.7);
-            scene.add(instrMesh);
-
-            calibRing = new THREE.Mesh(
-                new THREE.TorusGeometry(0.06, 0.002, 8, 32),
-                new THREE.MeshBasicMaterial({ color: 0x00ffcc })
-            );
-            calibRing.position.set(0, 1.2, -0.7);
-            scene.add(calibRing);
-
-            // Physics
+            // --- 2. Cannon.js (Physics) ---
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
+            const pMat = new CANNON.Material({ friction: 2.0 });
 
-            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.1), new THREE.MeshStandardMaterial({ color: 0xff00ff }));
+            const groundBody = new CANNON.Body({ mass: 0, material: pMat });
+            groundBody.addShape(new CANNON.Plane());
+            groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
+            world.addBody(groundBody);
+
+            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.2), new THREE.MeshStandardMaterial({ color: 0x00ffaa }));
             scene.add(cubeMesh);
-            cubeBody = new CANNON.Body({ mass: 0.2 });
-            cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.05, 0.05, 0.05)));
-            cubeBody.position.set(0, 1.5, -0.4);
+            cubeBody = new CANNON.Body({ mass: 0.1, material: pMat });
+            cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.1, 0.1, 0.1)));
+            cubeBody.position.set(0, 2, -1);
             world.addBody(cubeBody);
 
-            const jGeo = new THREE.SphereGeometry(0.012, 8, 4);
+            const jGeo = new THREE.SphereGeometry(0.015, 6, 6);
             for (let i = 0; i < 21; i++) {
                 const m = new THREE.Mesh(jGeo, new THREE.MeshBasicMaterial({ color: 0xffffff }));
                 scene.add(m);
                 tipMeshes.push(m);
-                const b = new CANNON.Body({ mass: 0, type: CANNON.Body.KINEMATIC });
-                b.addShape(new CANNON.Sphere(0.012));
+                const b = new CANNON.Body({ mass: 0, material: pMat, type: CANNON.Body.KINEMATIC });
+                b.addShape(new CANNON.Sphere(0.015));
                 world.addBody(b);
                 tipBodies.push(b);
             }
 
-            // Hand Tracking
+            // --- 3. MediaPipe Tracking Logic (CALIBRATED & STABLE) ---
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
             hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
 
             hands.onResults((results) => {
-                if (!results.multiHandLandmarks?.length) return;
-                const lm = results.multiHandLandmarks[0];
-                const xrCamera = renderer.xr.getCamera(camera);
-                
-                // Anti-Warp Depth Calculation
-                const palmAvgZ = (lm[5].z + lm[9].z + lm[13].z + lm[17].z) * 0.25;
+                if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                    const lm = results.multiHandLandmarks[0];
+                    const xrCamera = renderer.xr.getCamera(camera);
 
-                if (!isCalibrated && renderer.xr.isPresenting) {
-                    if (Math.abs(lm[0].x - 0.5) < 0.2) {
+                    // Anti-Warp: Use palm points (5,9,13,17) instead of wrist(0) to get depth
+                    const palmAvgZ = (lm[5].z + lm[9].z + lm[13].z + lm[17].z) * 0.25;
+
+                    // Initial Calibration Loop (Hold arm straight for ~1 second)
+                    if (!isCalibrated && renderer.xr.isPresenting) {
                         calibCount++;
                         referenceZ = Math.max(referenceZ, Math.abs(palmAvgZ));
-                        if (calibCount > 50) {
-                            isCalibrated = true;
-                            instrMesh.visible = calibRing.visible = false;
-                        }
+                        if (calibCount > 60) isCalibrated = true;
+                        return; 
                     }
-                    return;
-                }
 
-                if (isCalibrated) {
-                    const depthScale = 0.85 / referenceZ;
-                    let targetZ = -palmAvgZ * depthScale;
-                    if (lastStableZ === 0) lastStableZ = targetZ;
-                    targetZ = lastStableZ + (targetZ - lastStableZ) * CONFIG.lerp;
-                    lastStableZ = targetZ;
+                    if (isCalibrated) {
+                        const depthScale = 0.85 / referenceZ;
+                        
+                        // Smooth Depth Movement (Filter out jitter)
+                        let targetZ = -palmAvgZ * depthScale;
+                        if (lastStableZ === 0) lastStableZ = targetZ;
+                        targetZ = lastStableZ + (targetZ - lastStableZ) * CONFIG.lerp;
+                        lastStableZ = targetZ;
 
-                    lm.forEach((point, i) => {
-                        const pCorr = 1.0 - (point.z * 0.4);
-                        _v.set(
-                            (point.x - 0.5) * CONFIG.spread * pCorr,
-                            -(point.y - 0.5) * CONFIG.vertical * pCorr,
-                            targetZ + (point.z - palmAvgZ) * depthScale + CONFIG.zOffset
-                        );
-                        _v.applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
-                        tipBodies[i].position.lerp(new CANNON.Vec3(_v.x, _v.y, _v.z), CONFIG.lerp, tipBodies[i].position);
-                        tipMeshes[i].position.copy(tipBodies[i].position);
-                    });
+                        lm.forEach((point, i) => {
+                            // Perspective Correction for X, Y
+                            const pCorr = 1.0 - (point.z * 0.4);
+                            
+                            const v = new THREE.Vector3(
+                                (point.x - 0.5) * CONFIG.spread * pCorr, 
+                                -(point.y - 0.5) * CONFIG.vertical * pCorr, 
+                                targetZ + (point.z - palmAvgZ) * depthScale + CONFIG.zOffset
+                            ).applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
+                            
+                            // Apply with Lerp for ultimate smoothness
+                            tipBodies[i].position.lerp(new CANNON.Vec3(v.x, v.y, v.z), CONFIG.lerp, tipBodies[i].position);
+                            tipMeshes[i].position.copy(tipBodies[i].position);
+                        });
+                    }
                 }
             });
 
             const videoElement = document.getElementById('input_video');
             const cameraUtils = new Camera(videoElement, {
                 onFrame: async () => { await hands.send({ image: videoElement }); },
-                facingMode: "environment", width: CONFIG.vWidth, height: CONFIG.vHeight
+                facingMode: "environment", width: 640, height: 360
             });
             cameraUtils.start();
-            
-            document.getElementById('overlay').style.display = 'none';
 
+            // WebXR Loop
             renderer.setAnimationLoop(() => {
                 if (isCalibrated) {
                     world.step(1/60);
@@ -190,7 +144,7 @@
             });
         }
 
-        window.onload = init;
+        init();
     </script>
 </body>
 </html>
