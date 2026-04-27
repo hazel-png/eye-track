@@ -3,53 +3,53 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Magic Hands VR - Haptic Feedback</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+    <title>Magic Hands VR - Fixed Edition</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/cannon@0.6.2/build/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
     <style>
         :root { --ios-blue: #007AFF; }
         body { margin: 0; overflow: hidden; background: #000; font-family: -apple-system, sans-serif; }
         #overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            display: flex; flex-direction: column; align-items: center; justify-content: center;
-            background: #111; z-index: 2000; color: white; text-align: center;
+            display: flex; align-items: center; justify-content: center;
+            background: #111; z-index: 2000; color: white;
         }
         .ios-btn {
-            background: var(--ios-blue); color: white; border: none; padding: 20px 50px;
-            border-radius: 20px; font-size: 20px; font-weight: 600; cursor: pointer;
+            background: var(--ios-blue); color: white; border: none; padding: 20px 40px;
+            border-radius: 20px; font-size: 18px; font-weight: 600; cursor: pointer;
         }
         #input_video { display: none; }
     </style>
 </head>
 <body>
     <div id="overlay">
-        <div style="background: rgba(255,255,255,0.1); backdrop-filter: blur(20px); padding: 40px; border-radius: 30px;">
-            <h2>Haptic Hands VR</h2>
-            <p>物体に触れると「振動」します</p>
-            <button class="ios-btn" id="start-btn">VRを開始</button>
-        </div>
+        <button class="ios-btn" id="start-btn">VR体験を開始</button>
     </div>
     <video id="input_video" playsinline></video>
 
     <script type="module">
+        // VRButtonのインポート（Three.jsが読み込まれた後に実行される）
         import { VRButton } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/webxr/VRButton.js';
-
-        const CONFIG = { sensitivity: 3.8, power: 0.85, baseOffset: -0.5, lerp: 0.35 };
 
         let scene, camera, renderer, world, cubeMesh, cubeBody;
         let calibSphere, isCalibrating = false, calibComplete = false;
-        let isHandVisible = false, maxReachZ = 0.15, currentRawZ = 0;
+        let maxReachZ = 0.15, currentRawZ = 0;
         const fingers = [];
         const dt = 1/60;
 
-        // 振動関数
         function vibrate(ms) { if (navigator.vibrate) navigator.vibrate(ms); }
 
         async function init() {
-            document.getElementById('overlay').remove();
+            // 要素が存在するかチェック
+            const startBtn = document.getElementById('start-btn');
+            const overlay = document.getElementById('overlay');
+            if (overlay) overlay.remove();
 
+            // --- Three.js & Physics Setup ---
             scene = new THREE.Scene();
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -64,37 +64,30 @@
             // キャリブターゲット
             calibSphere = new THREE.Mesh(
                 new THREE.SphereGeometry(0.08, 32, 32),
-                new THREE.MeshStandardMaterial({ color: 0x007AFF, transparent: true, opacity: 0.2 })
+                new THREE.MeshStandardMaterial({ color: 0x007AFF, transparent: true, opacity: 0.3 })
             );
-            calibSphere.position.set(0, 1.25, -0.4);
+            calibSphere.position.set(0, 1.3, -0.4);
             scene.add(calibSphere);
 
-            // 物理オブジェクト
+            // ターゲットキューブ
             cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.12), new THREE.MeshStandardMaterial({ color: 0xffffff }));
             cubeMesh.visible = false;
             scene.add(cubeMesh);
-
             cubeBody = new CANNON.Body({ mass: 0.5 });
             cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.06, 0.06, 0.06)));
             cubeBody.position.set(0, 1.5, -0.6);
             world.addBody(cubeBody);
 
-            // 【追加】衝突イベントで振動
+            // 衝突時の振動
             cubeBody.addEventListener("collide", (e) => {
-                // 軽く「コツッ」と震わせる
-                // 衝撃の強さに応じて 5ms〜20ms で調整
-                const velocity = e.contact.getImpactVelocityAlongNormal();
-                const duration = Math.min(Math.max(velocity * 5, 5), 20);
-                vibrate(duration);
+                const vel = e.contact.getImpactVelocityAlongNormal();
+                vibrate(Math.min(vel * 10, 20));
             });
 
             scene.add(new THREE.AmbientLight(0xffffff, 1.0));
-            const light = new THREE.PointLight(0xffffff, 1);
-            light.position.set(2, 5, 2);
-            scene.add(light);
 
             for (let i = 0; i < 21; i++) {
-                const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.015, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+                const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.015), new THREE.MeshBasicMaterial({ color: 0xffffff }));
                 scene.add(mesh);
                 const body = new CANNON.Body({ mass: 0, type: CANNON.Body.KINEMATIC });
                 body.addShape(new CANNON.Sphere(0.015));
@@ -102,24 +95,16 @@
                 fingers.push({ mesh, body });
             }
 
+            // --- MediaPipe Hands ---
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
-            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
+            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7 });
 
             hands.onResults((results) => {
-                const xrCamera = renderer.xr.getCamera(camera);
-                if (!results.multiHandLandmarks?.length) {
-                    if (isHandVisible) isHandVisible = false;
-                    fingers.forEach(f => f.body.position.set(0, -100, 0));
-                    return;
-                }
-
-                if (!isHandVisible) {
-                    isHandVisible = true;
-                    vibrate(20); // 認識開始
-                }
-
+                if (!results.multiHandLandmarks?.length) return;
                 const landmarks = results.multiHandLandmarks[0];
+                const xrCamera = renderer.xr.getCamera(camera);
                 currentRawZ = landmarks[0].z;
+
                 const p1 = landmarks[5], p2 = landmarks[9], p3 = landmarks[13], p4 = landmarks[17];
                 const palmCenter = {
                     x: (p1.x + p2.x + p3.x + p4.x) / 4,
@@ -128,28 +113,39 @@
                 };
 
                 let adjustedZ = calibComplete 
-                    ? Math.pow(Math.abs(palmCenter.z) / maxReachZ, CONFIG.power) * CONFIG.sensitivity 
+                    ? Math.pow(Math.abs(palmCenter.z) / maxReachZ, 0.85) * 3.5 
                     : Math.abs(palmCenter.z) * 5.0;
 
                 landmarks.forEach((point, i) => {
-                    const f = fingers[i];
                     const _v = new THREE.Vector3(
                         (palmCenter.x - 0.5) * 2.2 + (point.x - palmCenter.x) * 1.8,
                         -(palmCenter.y - 0.5) * 2.2 - (point.y - palmCenter.y) * 1.8,
-                        -adjustedZ + (point.z - palmCenter.z) * 1.5 + CONFIG.baseOffset
+                        -adjustedZ + (point.z - palmCenter.z) * 1.5 - 0.5
                     );
                     _v.applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
-                    f.body.position.lerp(new CANNON.Vec3(_v.x, _v.y, _v.z), CONFIG.lerp);
-                    f.mesh.position.copy(f.body.position);
+                    fingers[i].body.position.copy(_v);
+                    fingers[i].mesh.position.copy(_v);
                 });
 
                 if (!calibComplete && !isCalibrating) {
-                    if (fingers[8].body.position.distanceTo(calibSphere.position) < 0.15) startCalib();
+                    if (fingers[8].body.position.distanceTo(calibSphere.position) < 0.15) {
+                        isCalibrating = true;
+                        vibrate(10);
+                        calibSphere.material.color.set(0x34C759);
+                        setTimeout(() => {
+                            maxReachZ = Math.abs(currentRawZ);
+                            calibComplete = true;
+                            calibSphere.visible = false;
+                            cubeMesh.visible = true;
+                            vibrate([40, 30, 40]);
+                        }, 2000);
+                    }
                 }
             });
 
-            const cameraUtils = new Camera(document.getElementById('input_video'), {
-                onFrame: async () => { await hands.send({ image: document.getElementById('input_video') }); },
+            const video = document.getElementById('input_video');
+            const cameraUtils = new Camera(video, {
+                onFrame: async () => { await hands.send({ image: video }); },
                 facingMode: "environment", width: 1280, height: 720
             });
             cameraUtils.start();
@@ -164,20 +160,13 @@
             });
         }
 
-        function startCalib() {
-            isCalibrating = true;
-            vibrate(10);
-            calibSphere.material.color.set(0x34C759);
-            setTimeout(() => {
-                maxReachZ = Math.abs(currentRawZ);
-                calibComplete = true;
-                calibSphere.visible = false;
-                cubeMesh.visible = true;
-                vibrate([40, 30, 40]);
-            }, 2000);
+        // DOMが読み込まれてからリスナーを登録
+        const btn = document.getElementById('start-btn');
+        if (btn) {
+            btn.addEventListener('click', init);
+        } else {
+            console.error("Start button not found!");
         }
-
-        document.getElementById('start-btn').addEventListener('click', init);
     </script>
 </body>
 </html>
