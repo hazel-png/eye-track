@@ -2,22 +2,47 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <title>Fixed Stable VR Hands</title>
+    <title>Stable VR Hands - Final Fix</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
         video { display: none; }
+        #overlay { position: fixed; top: 20px; left: 20px; color: white; z-index: 10; pointer-events: none; }
     </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
 </head>
 <body>
+    <div id="overlay">Loading Libraries...</div>
     <video id="input_video" playsinline></video>
 
-    <script type="module">
-        // Import Three.js and VRButton from ESM to ensure 'THREE' is defined correctly
-        import * as THREE from 'https://cdn.skypack.dev/three@0.150.0/build/three.module.js';
-        import { VRButton } from 'https://cdn.skypack.dev/three@0.150.0/examples/jsm/webxr/VRButton.js';
+    <script>
+        // --- Inline VRButton to avoid module errors ---
+        const VRButton = {
+            createButton(renderer) {
+                const button = document.createElement('button');
+                button.style.position = 'absolute';
+                button.style.bottom = '20px';
+                button.style.left = 'calc(50% - 75px)';
+                button.style.width = '150px';
+                button.style.height = '40px';
+                button.style.background = '#1a73e8';
+                button.style.color = '#fff';
+                button.style.border = 'none';
+                button.style.borderRadius = '20px';
+                button.style.cursor = 'pointer';
+                button.textContent = 'ENTER VR';
+                
+                button.onclick = () => {
+                    if (navigator.xr) {
+                        navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor', 'bounded-floor'] })
+                            .then((session) => renderer.xr.setSession(session));
+                    }
+                };
+                return button;
+            }
+        };
 
         let scene, camera, renderer, world, cubeMesh, cubeBody;
         let instrMesh, calibRing;
@@ -28,7 +53,7 @@
         const CONFIG = {
             spread: 1.8, vertical: 1.5,
             zOffset: -0.25,
-            lerp: 0.35,
+            lerp: 0.3,
             vWidth: 640, vHeight: 360
         };
 
@@ -42,12 +67,13 @@
             ctx.fillStyle = '#00ffcc';
             ctx.textAlign = 'center';
             ctx.fillText(text, 256, 80);
-            const tex = new THREE.CanvasTexture(canvas);
-            return tex;
+            return new THREE.CanvasTexture(canvas);
         }
 
         async function init() {
-            // Scene Setup
+            document.getElementById('overlay').textContent = 'Initializing VR...';
+
+            // Scene setup
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x050505);
             scene.add(new THREE.GridHelper(20, 20, 0x333333, 0x111111));
@@ -63,7 +89,7 @@
 
             scene.add(new THREE.AmbientLight(0xffffff, 1.0));
 
-            // Calibration UI
+            // UI
             instrMesh = new THREE.Mesh(
                 new THREE.PlaneGeometry(0.5, 0.12),
                 new THREE.MeshBasicMaterial({ map: createTextCanvas("EXTEND ARM FULLY"), transparent: true })
@@ -78,7 +104,7 @@
             calibRing.position.set(0, 1.2, -0.7);
             scene.add(calibRing);
 
-            // Physics (Cannon.js)
+            // Physics
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
 
@@ -100,21 +126,16 @@
                 tipBodies.push(b);
             }
 
-            // MediaPipe Implementation
+            // Hand Tracking
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
-            hands.setOptions({ 
-                maxNumHands: 1, 
-                modelComplexity: 0, 
-                minDetectionConfidence: 0.7, 
-                minTrackingConfidence: 0.7 
-            });
+            hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
 
             hands.onResults((results) => {
                 if (!results.multiHandLandmarks?.length) return;
                 const lm = results.multiHandLandmarks[0];
                 const xrCamera = renderer.xr.getCamera(camera);
                 
-                // Stable Palm Depth Logic (Anti-Warp)
+                // Anti-Warp Depth Calculation
                 const palmAvgZ = (lm[5].z + lm[9].z + lm[13].z + lm[17].z) * 0.25;
 
                 if (!isCalibrated && renderer.xr.isPresenting) {
@@ -156,6 +177,8 @@
                 facingMode: "environment", width: CONFIG.vWidth, height: CONFIG.vHeight
             });
             cameraUtils.start();
+            
+            document.getElementById('overlay').style.display = 'none';
 
             renderer.setAnimationLoop(() => {
                 if (isCalibrated) {
@@ -167,7 +190,7 @@
             });
         }
 
-        init();
+        window.onload = init;
     </script>
 </body>
 </html>
