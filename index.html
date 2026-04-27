@@ -3,156 +3,152 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Spatial Hands - Debug Mode</title>
+    <title>Spatial Hands - Perfect Sync</title>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/cannon@0.6.2/build/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
-        /* 修正：デバッグ用にカメラ映像を表示 */
-        #input_video { 
-            position: fixed; bottom: 10px; left: 10px; 
-            width: 160px; height: 120px; 
-            z-index: 3000; border: 2px solid #0f0;
-            display: block !important; /* 強制表示 */
-            background: #222;
-        }
-        #overlay {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            display: flex; align-items: center; justify-content: center;
-            background: #000; z-index: 2000;
-        }
-        .start-btn {
-            background: #fff; color: #000; border: none; padding: 20px 40px;
-            border-radius: 30px; font-size: 18px; font-weight: bold;
-        }
-        #status-log {
-            position: fixed; top: 10px; left: 10px; color: #0f0; 
-            font-size: 12px; z-index: 3001; pointer-events: none;
-        }
+        #input_video { position: fixed; bottom: 10px; right: 10px; width: 120px; height: 90px; z-index: 3000; border: 1px solid #0f0; opacity: 0.5; }
+        #status-log { position: fixed; top: 10px; left: 10px; color: #0f0; font-family: monospace; z-index: 3001; background: rgba(0,0,0,0.5); }
+        #overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #000; z-index: 2000; }
+        .start-btn { background: #fff; color: #000; border: none; padding: 20px 40px; border-radius: 30px; font-size: 18px; font-weight: bold; }
     </style>
 </head>
 <body>
-    <div id="status-log">Status: Waiting for Start...</div>
-    <div id="overlay"><button class="start-btn" id="start-btn">VRを開始 (カメラ確認用)</button></div>
-    
+    <div id="status-log">Ready</div>
+    <div id="overlay"><button class="start-btn" id="start-btn">VRを開始</button></div>
     <video id="input_video" playsinline muted autoplay></video>
 
     <script type="module">
         import { VRButton } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/webxr/VRButton.js';
 
         let scene, camera, renderer, world, cubeMesh, cubeBody, ringMesh;
-        let isHandActive = false, calibComplete = false;
-        let maxReachZ = 0.15, currentRawZ = 0, stayTimer = 0;
+        let isHandActive = false, calibComplete = false, stayTimer = 0;
+        let maxReachZ = 0.2; 
         const fingers = [];
         const log = document.getElementById('status-log');
 
         async function init() {
-            log.innerText = "Status: Initializing...";
-            document.getElementById('overlay').style.display = 'none';
+            document.getElementById('overlay').remove();
 
-            // --- Three.js ---
             scene = new THREE.Scene();
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 100);
+            
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
             document.body.appendChild(VRButton.createButton(renderer));
 
-            // --- Physics ---
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
 
-            // リング・キューブ・ライト
-            ringMesh = new THREE.Mesh(new THREE.RingGeometry(0.04, 0.05, 32), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0 }));
+            // リング演出
+            ringMesh = new THREE.Mesh(
+                new THREE.RingGeometry(0.03, 0.035, 32),
+                new THREE.MeshBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0, side: THREE.DoubleSide })
+            );
             scene.add(ringMesh);
+
+            // 物理ターゲット
             cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.1), new THREE.MeshStandardMaterial({ color: 0xffffff }));
             cubeMesh.visible = false;
             scene.add(cubeMesh);
             cubeBody = new CANNON.Body({ mass: 0.5 });
             cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.05, 0.05, 0.05)));
-            cubeBody.position.set(0, 1.4, -0.4);
+            cubeBody.position.set(0, 1.5, -0.5);
             world.addBody(cubeBody);
-            scene.add(new THREE.AmbientLight(0xffffff, 1.2));
 
-            // 指パーツ
+            scene.add(new THREE.PointLight(0xffffff, 1, 10));
+            scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+
+            // 指の作成（目立つ色に）
             for (let i = 0; i < 21; i++) {
-                const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.01), new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0 }));
+                const mesh = new THREE.Mesh(
+                    new THREE.SphereGeometry(0.015, 8, 8),
+                    new THREE.MeshStandardMaterial({ color: 0x00ff00, emissive: 0x00ff00, emissiveIntensity: 0.5 })
+                );
+                mesh.visible = false;
                 scene.add(mesh);
                 const body = new CANNON.Body({ mass: 0, type: CANNON.Body.KINEMATIC });
-                body.addShape(new CANNON.Sphere(0.01));
+                body.addShape(new CANNON.Sphere(0.015));
                 world.addBody(body);
                 fingers.push({ mesh, body });
             }
 
-            // --- MediaPipe Hands ---
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
-            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.5 });
+            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.6 });
 
             hands.onResults((results) => {
                 if (!results.multiHandLandmarks?.length) {
-                    log.innerText = "Status: CAMERA OK / HAND NOT FOUND";
                     isHandActive = false;
                     stayTimer = 0;
-                    fingers.forEach(f => f.mesh.material.opacity = 0);
+                    ringMesh.material.opacity = 0;
+                    fingers.forEach(f => f.mesh.visible = false);
+                    log.innerText = "Searching for hand...";
                     return;
                 }
 
-                log.innerText = "Status: HAND DETECTED!";
                 isHandActive = true;
+                log.innerText = calibComplete ? "System Active" : "Stay Still to Calibrate...";
+                
                 const landmarks = results.multiHandLandmarks[0];
-                currentRawZ = landmarks[0].z;
                 const xrCamera = renderer.xr.getCamera(camera);
 
                 landmarks.forEach((point, i) => {
-                    const zBase = calibComplete ? Math.pow(Math.abs(point.z) / maxReachZ, 0.8) * 3.5 : Math.abs(point.z) * 5.0;
-                    const _v = new THREE.Vector3((point.x - 0.5) * 2.5, -(point.y - 0.5) * 2.5, -zBase - 0.4);
+                    const f = fingers[i];
+                    f.mesh.visible = true;
+
+                    // 座標計算の最適化: カメラからの相対距離を計算
+                    // MediaPipeのZは手前がマイナスなので反転させる
+                    const rawZ = Math.abs(point.z);
+                    const zDist = calibComplete ? (rawZ / maxReachZ) * 0.8 : rawZ * 4.0;
+                    
+                    const _v = new THREE.Vector3(
+                        (point.x - 0.5) * 2.0, 
+                        -(point.y - 0.5) * 2.0, 
+                        -(zDist + 0.3) // カメラから少し離れた位置を基準にする
+                    );
+
+                    // XRカメラの向きに合わせて回転・移動
                     _v.applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
-                    fingers[i].body.position.set(_v.x, _v.y, _v.z);
-                    fingers[i].mesh.position.copy(fingers[i].body.position);
-                    fingers[i].mesh.material.opacity = 0.9;
+                    f.body.position.lerp(new CANNON.Vec3(_v.x, _v.y, _v.z), 0.5);
+                    f.mesh.position.copy(f.body.position);
                 });
 
                 if (!calibComplete) {
                     stayTimer++;
                     ringMesh.position.copy(fingers[9].mesh.position);
                     ringMesh.lookAt(xrCamera.position);
-                    ringMesh.material.opacity = Math.min(stayTimer / 60, 0.8);
-                    if (stayTimer > 60) {
-                        maxReachZ = Math.abs(currentRawZ);
+                    ringMesh.material.opacity = Math.min(stayTimer / 50, 1.0);
+                    
+                    if (stayTimer > 50) {
+                        maxReachZ = Math.abs(landmarks[0].z);
                         calibComplete = true;
                         ringMesh.visible = false;
                         cubeMesh.visible = true;
+                        if(navigator.vibrate) navigator.vibrate([30, 30, 30]);
                     }
                 }
             });
 
-            // --- Camera Start ---
             const video = document.getElementById('input_video');
             const cameraUtils = new Camera(video, {
                 onFrame: async () => { await hands.send({ image: video }); },
                 facingMode: "environment", width: 1280, height: 720
             });
-            
-            try {
-                await cameraUtils.start();
-                log.innerText = "Status: CAMERA STARTED";
-            } catch (err) {
-                log.innerText = "Status: CAMERA ERROR - " + err.message;
-            }
+            cameraUtils.start();
 
             renderer.setAnimationLoop(() => {
                 if (renderer.xr.isPresenting) {
-                    try {
-                        world.step(1/60);
-                        if (calibComplete) {
-                            cubeMesh.position.copy(cubeBody.position);
-                            cubeMesh.quaternion.copy(cubeBody.quaternion);
-                        }
-                        renderer.render(scene, camera);
-                    } catch (e) {}
+                    world.step(1/60);
+                    if (calibComplete) {
+                        cubeMesh.position.copy(cubeBody.position);
+                        cubeMesh.quaternion.copy(cubeBody.quaternion);
+                    }
+                    renderer.render(scene, camera);
                 }
             });
         }
