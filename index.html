@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="en">
 <head>
     <meta charset="utf-8">
-    <title>Native WebXR Physics VR - High Stability</title>
+    <title>Native WebXR Stable Hands - English Comments</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r150/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
@@ -19,128 +19,170 @@
         import { VRButton } from 'https://cdn.jsdelivr.net/npm/three@0.150.0/examples/jsm/webxr/VRButton.js';
 
         let scene, camera, renderer, world, cubeMesh, cubeBody;
+        let instrMesh, calibRing;
         let isCalibrated = false, calibCount = 0, referenceZ = 0;
-        let lastSmoothZ = 0;
+        let lastStableZ = 0;
 
         const tipMeshes = [], tipBodies = [];
+        
+        // Configuration for tracking and physics
         const CONFIG = {
             spread: 1.8, vertical: 1.5,
-            zOffset: -0.3,
-            smoothing: 0.25, // 0.1(安定)〜0.5(高速)
-            radius: 0.015
+            zOffset: -0.25,
+            lerp: 0.35,      // Smoothing factor (0.1 to 0.5)
+            modelComplex: 0, // 0 for Lite (fast), 1 for Full
+            vWidth: 640, vHeight: 360
         };
 
+        const _v = new THREE.Vector3();
+
+        // Helper to create UI textures
+        function createTextCanvas(text) {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = 512; canvas.height = 128;
+            ctx.font = 'bold 40px Arial';
+            ctx.fillStyle = '#00ffcc';
+            ctx.textAlign = 'center';
+            ctx.fillText(text, 256, 80);
+            return new THREE.CanvasTexture(canvas);
+        }
+
         async function init() {
+            // Three.js Setup
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x050505);
-            scene.add(new THREE.GridHelper(20, 20, 0x444444, 0x222222));
+            scene.add(new THREE.GridHelper(20, 20, 0x333333, 0x111111));
 
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.01, 50);
-
-            renderer = new THREE.WebGLRenderer({ antialias: true });
-            renderer.setPixelRatio(window.devicePixelRatio);
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.01, 100);
+            
+            renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true });
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
             renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.xr.enabled = true; 
+            renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
             document.body.appendChild(VRButton.createButton(renderer));
 
             scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-            const light = new THREE.DirectionalLight(0xffffff, 1);
-            light.position.set(1, 5, 1);
-            scene.add(light);
 
-            // Physics
+            // Calibration UI
+            instrMesh = new THREE.Mesh(
+                new THREE.PlaneGeometry(0.5, 0.12),
+                new THREE.MeshBasicMaterial({ map: createTextCanvas("EXTEND ARM FULLY"), transparent: true })
+            );
+            instrMesh.position.set(0, 1.4, -0.7);
+            scene.add(instrMesh);
+
+            calibRing = new THREE.Mesh(
+                new THREE.TorusGeometry(0.06, 0.002, 8, 32),
+                new THREE.MeshBasicMaterial({ color: 0x00ffcc })
+            );
+            calibRing.position.set(0, 1.2, -0.7);
+            scene.add(calibRing);
+
+            // Cannon.js Physics Setup
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
-            const pMat = new CANNON.Material({ friction: 1.0 });
+            world.solver.iterations = 5;
 
-            // Ground
-            const groundBody = new CANNON.Body({ mass: 0, material: pMat });
+            // Ground plane
+            const groundBody = new CANNON.Body({ mass: 0 });
             groundBody.addShape(new CANNON.Plane());
             groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
             world.addBody(groundBody);
 
-            // Cube
-            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.1), new THREE.MeshStandardMaterial({ color: 0x00ffaa }));
+            // Target Object
+            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.1), new THREE.MeshStandardMaterial({ color: 0xff00ff }));
             scene.add(cubeMesh);
-            cubeBody = new CANNON.Body({ mass: 0.1, material: pMat });
+            cubeBody = new CANNON.Body({ mass: 0.2 });
             cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.05, 0.05, 0.05)));
-            cubeBody.position.set(0, 1.2, -0.4);
+            cubeBody.position.set(0, 1.5, -0.4);
             world.addBody(cubeBody);
 
-            // 21 Joint Spheres (Low Poly)
-            const jGeo = new THREE.SphereGeometry(CONFIG.radius, 8, 4);
+            // 21-point Hand Joints (Low Poly)
+            const jGeo = new THREE.SphereGeometry(0.012, 8, 4);
             for (let i = 0; i < 21; i++) {
                 const m = new THREE.Mesh(jGeo, new THREE.MeshBasicMaterial({ color: 0xffffff }));
                 scene.add(m);
                 tipMeshes.push(m);
                 const b = new CANNON.Body({ mass: 0, type: CANNON.Body.KINEMATIC });
-                b.addShape(new CANNON.Sphere(CONFIG.radius));
+                b.addShape(new CANNON.Sphere(0.012));
                 world.addBody(b);
                 tipBodies.push(b);
             }
 
-            // MediaPipe Hands Setup
+            // MediaPipe Hands Implementation
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
             hands.setOptions({ 
                 maxNumHands: 1, 
-                modelComplexity: 0, // 軽量
+                modelComplexity: CONFIG.modelComplex, 
                 minDetectionConfidence: 0.7, 
                 minTrackingConfidence: 0.7 
             });
 
             hands.onResults((results) => {
-                if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-                    const lm = results.multiHandLandmarks[0];
-                    const xrCamera = renderer.xr.getCamera(camera);
+                if (!results.multiHandLandmarks?.length) return;
+                const lm = results.multiHandLandmarks[0];
+                const xrCamera = renderer.xr.getCamera(camera);
 
-                    // 手のひら中央（9番、5番、17番の平均）で深度を算出
-                    const palmAvgZ = (lm[5].z + lm[9].z + lm[17].z) / 3;
+                // Anti-Warp: Use average of palm landmarks (5,9,13,17) instead of wrist(0)
+                const palmAvgZ = (lm[5].z + lm[9].z + lm[13].z + lm[17].z) * 0.25;
 
-                    if (!isCalibrated && renderer.xr.isPresenting) {
+                if (!isCalibrated && renderer.xr.isPresenting) {
+                    if (Math.abs(lm[0].x - 0.5) < 0.2) {
                         calibCount++;
                         referenceZ = Math.max(referenceZ, Math.abs(palmAvgZ));
-                        if (calibCount > 50) isCalibrated = true;
-                        return;
+                        if (calibCount > 50) {
+                            isCalibrated = true;
+                            instrMesh.visible = calibRing.visible = false;
+                        }
                     }
+                    return;
+                }
 
-                    if (isCalibrated) {
-                        const depthScale = 0.8 / referenceZ; // 腕の長さを約80cmにマッピング
+                if (isCalibrated) {
+                    const depthScale = 0.85 / referenceZ;
+                    
+                    // Smooth depth movement
+                    let targetZ = -palmAvgZ * depthScale;
+                    if (lastStableZ === 0) lastStableZ = targetZ;
+                    targetZ = lastStableZ + (targetZ - lastStableZ) * CONFIG.lerp;
+                    lastStableZ = targetZ;
+
+                    lm.forEach((point, i) => {
+                        // Perspective correction
+                        const pCorr = 1.0 - (point.z * 0.4);
+                        _v.set(
+                            (point.x - 0.5) * CONFIG.spread * pCorr,
+                            -(point.y - 0.5) * CONFIG.vertical * pCorr,
+                            targetZ + (point.z - palmAvgZ) * depthScale + CONFIG.zOffset
+                        );
+                        _v.applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
                         
-                        // Z軸のスムージング（ワープ防止）
-                        let targetZ = -palmAvgZ * depthScale;
-                        if (lastSmoothZ === 0) lastSmoothZ = targetZ;
-                        lastSmoothZ += (targetZ - lastSmoothZ) * CONFIG.smoothing;
-
-                        lm.forEach((point, i) => {
-                            // 遠近歪み補正
-                            const pCorr = 1.0 - (point.z * 0.4);
-                            
-                            const v = new THREE.Vector3(
-                                (point.x - 0.5) * CONFIG.spread * pCorr, 
-                                -(point.y - 0.5) * CONFIG.vertical * pCorr, 
-                                lastSmoothZ + (point.z - palmAvgZ) * depthScale + CONFIG.zOffset
-                            ).applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
-                            
-                            tipBodies[i].position.set(v.x, v.y, v.z);
-                            tipMeshes[i].position.copy(v);
-                        });
-                    }
+                        // Apply position to physics body and mesh
+                        tipBodies[i].position.lerp(new CANNON.Vec3(_v.x, _v.y, _v.z), CONFIG.lerp, tipBodies[i].position);
+                        tipMeshes[i].position.copy(tipBodies[i].position);
+                    });
                 }
             });
 
+            // Camera handling
             const videoElement = document.getElementById('input_video');
             const cameraUtils = new Camera(videoElement, {
                 onFrame: async () => { await hands.send({ image: videoElement }); },
-                facingMode: "environment", // 外カメ
-                width: 640, height: 360
+                facingMode: "environment", 
+                width: CONFIG.vWidth, 
+                height: CONFIG.vHeight
             });
             cameraUtils.start();
 
+            // WebXR Animation Loop
             renderer.setAnimationLoop(() => {
-                world.step(1/60);
-                cubeMesh.position.copy(cubeBody.position);
-                cubeMesh.quaternion.copy(cubeBody.quaternion);
+                if (isCalibrated) {
+                    world.step(1/60);
+                    cubeMesh.position.copy(cubeBody.position);
+                    cubeMesh.quaternion.copy(cubeBody.quaternion);
+                }
                 renderer.render(scene, camera);
             });
         }
