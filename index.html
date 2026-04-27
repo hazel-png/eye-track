@@ -3,93 +3,83 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Spatial Hands - Anywhere Calib</title>
+    <title>Spatial Hands - Debug Mode</title>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/cannon@0.6.2/build/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: -apple-system, sans-serif; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
+        /* 修正：デバッグ用にカメラ映像を表示 */
+        #input_video { 
+            position: fixed; bottom: 10px; left: 10px; 
+            width: 160px; height: 120px; 
+            z-index: 3000; border: 2px solid #0f0;
+            display: block !important; /* 強制表示 */
+            background: #222;
+        }
         #overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             display: flex; align-items: center; justify-content: center;
-            background: #000; z-index: 2000; transition: opacity 0.8s;
-        }
-        .ios-card {
-            background: rgba(255, 255, 255, 0.1); backdrop-filter: blur(20px);
-            padding: 40px; border-radius: 40px; text-align: center; color: white;
-            border: 1px solid rgba(255, 255, 255, 0.1);
+            background: #000; z-index: 2000;
         }
         .start-btn {
-            background: #fff; color: #000; border: none; padding: 15px 40px;
-            border-radius: 30px; font-size: 18px; font-weight: 600; cursor: pointer;
+            background: #fff; color: #000; border: none; padding: 20px 40px;
+            border-radius: 30px; font-size: 18px; font-weight: bold;
         }
-        #input_video { display: none; }
+        #status-log {
+            position: fixed; top: 10px; left: 10px; color: #0f0; 
+            font-size: 12px; z-index: 3001; pointer-events: none;
+        }
     </style>
 </head>
 <body>
-    <div id="overlay">
-        <div class="ios-card">
-            <h1 style="font-weight: 200;">Spatial Anywhere</h1>
-            <p style="opacity: 0.6; margin-bottom: 20px;">好きな場所で手をかざして静止してください</p>
-            <button class="start-btn" id="start-btn">VRを開始</button>
-        </div>
-    </div>
-    <video id="input_video" playsinline></video>
+    <div id="status-log">Status: Waiting for Start...</div>
+    <div id="overlay"><button class="start-btn" id="start-btn">VRを開始 (カメラ確認用)</button></div>
+    
+    <video id="input_video" playsinline muted autoplay></video>
 
     <script type="module">
         import { VRButton } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/webxr/VRButton.js';
 
         let scene, camera, renderer, world, cubeMesh, cubeBody, ringMesh;
         let isHandActive = false, calibComplete = false;
-        let maxReachZ = 0.15, currentRawZ = 0;
-        let stayTimer = 0;
+        let maxReachZ = 0.15, currentRawZ = 0, stayTimer = 0;
         const fingers = [];
-
-        function vibrate(ms) { if (navigator.vibrate) navigator.vibrate(ms); }
+        const log = document.getElementById('status-log');
 
         async function init() {
-            // オーバーレイの非表示処理
-            const overlay = document.getElementById('overlay');
-            overlay.style.opacity = '0';
-            setTimeout(() => overlay.remove(), 800);
+            log.innerText = "Status: Initializing...";
+            document.getElementById('overlay').style.display = 'none';
 
-            // --- Three.js setup ---
+            // --- Three.js ---
             scene = new THREE.Scene();
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
-            
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
             document.body.appendChild(VRButton.createButton(renderer));
 
-            // --- Physics setup ---
+            // --- Physics ---
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
 
-            // キャリブレーション用リング
-            ringMesh = new THREE.Mesh(
-                new THREE.RingGeometry(0.04, 0.05, 32),
-                new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, side: THREE.DoubleSide })
-            );
+            // リング・キューブ・ライト
+            ringMesh = new THREE.Mesh(new THREE.RingGeometry(0.04, 0.05, 32), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0 }));
             scene.add(ringMesh);
-
-            // 物理キューブ（初期は非表示）
             cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.1), new THREE.MeshStandardMaterial({ color: 0xffffff }));
             cubeMesh.visible = false;
             scene.add(cubeMesh);
-            
             cubeBody = new CANNON.Body({ mass: 0.5 });
             cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.05, 0.05, 0.05)));
             cubeBody.position.set(0, 1.4, -0.4);
             world.addBody(cubeBody);
-            
             scene.add(new THREE.AmbientLight(0xffffff, 1.2));
 
-            // 指のパーツ作成
+            // 指パーツ
             for (let i = 0; i < 21; i++) {
-                const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.01), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0 }));
+                const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.01), new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0 }));
                 scene.add(mesh);
                 const body = new CANNON.Body({ mass: 0, type: CANNON.Body.KINEMATIC });
                 body.addShape(new CANNON.Sphere(0.01));
@@ -99,77 +89,70 @@
 
             // --- MediaPipe Hands ---
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
-            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7 });
+            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.5 });
 
             hands.onResults((results) => {
-                const xrCamera = renderer.xr.getCamera(camera);
-                
                 if (!results.multiHandLandmarks?.length) {
+                    log.innerText = "Status: CAMERA OK / HAND NOT FOUND";
                     isHandActive = false;
                     stayTimer = 0;
-                    ringMesh.material.opacity = 0;
-                    fingers.forEach(f => { f.mesh.material.opacity = 0; f.body.position.set(0,-10,0); });
+                    fingers.forEach(f => f.mesh.material.opacity = 0);
                     return;
                 }
 
-                if (!isHandActive) {
-                    isHandActive = true;
-                    vibrate(10);
-                    fingers.forEach(f => f.mesh.material.opacity = 0.9);
-                }
-
+                log.innerText = "Status: HAND DETECTED!";
+                isHandActive = true;
                 const landmarks = results.multiHandLandmarks[0];
                 currentRawZ = landmarks[0].z;
+                const xrCamera = renderer.xr.getCamera(camera);
 
                 landmarks.forEach((point, i) => {
-                    const f = fingers[i];
-                    // 奥行き計算（キャリブ後は maxReachZ に基づき正規化）
                     const zBase = calibComplete ? Math.pow(Math.abs(point.z) / maxReachZ, 0.8) * 3.5 : Math.abs(point.z) * 5.0;
                     const _v = new THREE.Vector3((point.x - 0.5) * 2.5, -(point.y - 0.5) * 2.5, -zBase - 0.4);
-                    
                     _v.applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
-                    f.body.position.lerp(new CANNON.Vec3(_v.x, _v.y, _v.z), 0.4);
-                    f.mesh.position.copy(f.body.position);
+                    fingers[i].body.position.set(_v.x, _v.y, _v.z);
+                    fingers[i].mesh.position.copy(fingers[i].body.position);
+                    fingers[i].mesh.material.opacity = 0.9;
                 });
 
-                // --- キャリブレーション・ロジック ---
                 if (!calibComplete) {
-                    stayTimer += 1;
-                    // 手の甲（中指の付け根）の位置にリングを表示
+                    stayTimer++;
                     ringMesh.position.copy(fingers[9].mesh.position);
                     ringMesh.lookAt(xrCamera.position);
                     ringMesh.material.opacity = Math.min(stayTimer / 60, 0.8);
-                    
-                    if (stayTimer > 60) { // 約1秒〜1.5秒で完了
+                    if (stayTimer > 60) {
                         maxReachZ = Math.abs(currentRawZ);
                         calibComplete = true;
                         ringMesh.visible = false;
                         cubeMesh.visible = true;
-                        vibrate([50, 30, 50]);
                     }
                 }
             });
 
+            // --- Camera Start ---
             const video = document.getElementById('input_video');
             const cameraUtils = new Camera(video, {
                 onFrame: async () => { await hands.send({ image: video }); },
                 facingMode: "environment", width: 1280, height: 720
             });
-            cameraUtils.start();
+            
+            try {
+                await cameraUtils.start();
+                log.innerText = "Status: CAMERA STARTED";
+            } catch (err) {
+                log.innerText = "Status: CAMERA ERROR - " + err.message;
+            }
 
-            // --- 安定化レンダリングループ ---
             renderer.setAnimationLoop(() => {
-                if (!renderer.xr.isPresenting) return;
-
-                try {
-                    world.step(1/60);
-                    if (calibComplete) {
-                        cubeMesh.position.copy(cubeBody.position);
-                        cubeMesh.quaternion.copy(cubeBody.quaternion);
-                    }
-                    renderer.render(scene, camera);
-                } catch (e) {
-                    // セッション移行中のエラーを無視
+                if (renderer.xr.isPresenting) {
+                    try {
+                        world.step(1/60);
+                        if (calibComplete) {
+                            cubeMesh.position.copy(cubeBody.position);
+                            cubeMesh.quaternion.copy(cubeBody.quaternion);
+                        }
+                        renderer.render(scene, camera);
+                    } catch (e) {}
                 }
             });
         }
