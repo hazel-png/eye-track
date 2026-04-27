@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <title>Native WebXR Stable Hands - English Comments</title>
+    <title>Fixed Rendering - Stable VR Hands</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r150/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
@@ -24,19 +24,16 @@
         let lastStableZ = 0;
 
         const tipMeshes = [], tipBodies = [];
-        
-        // Configuration for tracking and physics
         const CONFIG = {
             spread: 1.8, vertical: 1.5,
             zOffset: -0.25,
-            lerp: 0.35,      // Smoothing factor (0.1 to 0.5)
-            modelComplex: 0, // 0 for Lite (fast), 1 for Full
+            lerp: 0.35,
+            modelComplex: 0,
             vWidth: 640, vHeight: 360
         };
 
         const _v = new THREE.Vector3();
 
-        // Helper to create UI textures
         function createTextCanvas(text) {
             const canvas = document.createElement('canvas');
             const ctx = canvas.getContext('2d');
@@ -49,7 +46,6 @@
         }
 
         async function init() {
-            // Three.js Setup
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x050505);
             scene.add(new THREE.GridHelper(20, 20, 0x333333, 0x111111));
@@ -57,15 +53,15 @@
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.01, 100);
             
             renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true });
-            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.setPixelRatio(window.devicePixelRatio);
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
             document.body.appendChild(VRButton.createButton(renderer));
 
-            scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+            scene.add(new THREE.AmbientLight(0xffffff, 1.0)); // Brightened light
 
-            // Calibration UI
+            // UI
             instrMesh = new THREE.Mesh(
                 new THREE.PlaneGeometry(0.5, 0.12),
                 new THREE.MeshBasicMaterial({ map: createTextCanvas("EXTEND ARM FULLY"), transparent: true })
@@ -80,18 +76,10 @@
             calibRing.position.set(0, 1.2, -0.7);
             scene.add(calibRing);
 
-            // Cannon.js Physics Setup
+            // Physics
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
-            world.solver.iterations = 5;
 
-            // Ground plane
-            const groundBody = new CANNON.Body({ mass: 0 });
-            groundBody.addShape(new CANNON.Plane());
-            groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
-            world.addBody(groundBody);
-
-            // Target Object
             cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.1), new THREE.MeshStandardMaterial({ color: 0xff00ff }));
             scene.add(cubeMesh);
             cubeBody = new CANNON.Body({ mass: 0.2 });
@@ -99,7 +87,6 @@
             cubeBody.position.set(0, 1.5, -0.4);
             world.addBody(cubeBody);
 
-            // 21-point Hand Joints (Low Poly)
             const jGeo = new THREE.SphereGeometry(0.012, 8, 4);
             for (let i = 0; i < 21; i++) {
                 const m = new THREE.Mesh(jGeo, new THREE.MeshBasicMaterial({ color: 0xffffff }));
@@ -111,7 +98,6 @@
                 tipBodies.push(b);
             }
 
-            // MediaPipe Hands Implementation
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
             hands.setOptions({ 
                 maxNumHands: 1, 
@@ -124,8 +110,6 @@
                 if (!results.multiHandLandmarks?.length) return;
                 const lm = results.multiHandLandmarks[0];
                 const xrCamera = renderer.xr.getCamera(camera);
-
-                // Anti-Warp: Use average of palm landmarks (5,9,13,17) instead of wrist(0)
                 const palmAvgZ = (lm[5].z + lm[9].z + lm[13].z + lm[17].z) * 0.25;
 
                 if (!isCalibrated && renderer.xr.isPresenting) {
@@ -142,15 +126,12 @@
 
                 if (isCalibrated) {
                     const depthScale = 0.85 / referenceZ;
-                    
-                    // Smooth depth movement
                     let targetZ = -palmAvgZ * depthScale;
                     if (lastStableZ === 0) lastStableZ = targetZ;
                     targetZ = lastStableZ + (targetZ - lastStableZ) * CONFIG.lerp;
                     lastStableZ = targetZ;
 
                     lm.forEach((point, i) => {
-                        // Perspective correction
                         const pCorr = 1.0 - (point.z * 0.4);
                         _v.set(
                             (point.x - 0.5) * CONFIG.spread * pCorr,
@@ -158,25 +139,25 @@
                             targetZ + (point.z - palmAvgZ) * depthScale + CONFIG.zOffset
                         );
                         _v.applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
-                        
-                        // Apply position to physics body and mesh
                         tipBodies[i].position.lerp(new CANNON.Vec3(_v.x, _v.y, _v.z), CONFIG.lerp, tipBodies[i].position);
                         tipMeshes[i].position.copy(tipBodies[i].position);
                     });
                 }
             });
 
-            // Camera handling
             const videoElement = document.getElementById('input_video');
+            // Use MediaPipe's Camera utility for a dedicated requestAnimationFrame loop
             const cameraUtils = new Camera(videoElement, {
-                onFrame: async () => { await hands.send({ image: videoElement }); },
+                onFrame: async () => { 
+                    await hands.send({ image: videoElement }); 
+                },
                 facingMode: "environment", 
                 width: CONFIG.vWidth, 
                 height: CONFIG.vHeight
             });
             cameraUtils.start();
 
-            // WebXR Animation Loop
+            // Isolated Render Loop
             renderer.setAnimationLoop(() => {
                 if (isCalibrated) {
                     world.step(1/60);
