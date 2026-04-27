@@ -1,146 +1,189 @@
 <!DOCTYPE html>
-<html>
+<html lang="ja">
 <head>
-    <meta charset="utf-8">
-    <title>Stable VR Hands - Safe Start</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r150/three.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebXR Magic Hands - MediaPipe & Cannon.js</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #111; font-family: sans-serif; }
-        video { display: none; }
-        /* Setup Screen */
-        #setup-ui {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            display: flex; flex-direction: column; align-items: center; justify-content: center;
-            background: #222; color: white; z-index: 1000;
+        body { margin: 0; overflow: hidden; background: #000; }
+        #info {
+            position: absolute; top: 10px; left: 10px; color: white;
+            font-family: sans-serif; pointer-events: none; z-index: 10;
         }
-        .start-btn {
-            padding: 20px 40px; font-size: 20px; cursor: pointer;
-            background: #1a73e8; color: white; border: none; border-radius: 50px;
-        }
-        #vr-btn-container { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 10; }
+        canvas.input_canvas { display: none; }
     </style>
 </head>
 <body>
-    <div id="setup-ui">
-        <h1>Hand Tracking VR</h1>
-        <p>Camera & VR permission required.</p>
-        <button class="start-btn" id="activate-btn">START CAMERA</button>
+
+    <div id="info">
+        WebXR Hand Tracking Physics<br>
+        1. カメラ許可をオンにしてください<br>
+        2. Enter VRでゴーグルモード起動
     </div>
 
-    <div id="vr-btn-container"></div>
-    <video id="input_video" playsinline></video>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.150.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.150.0/examples/js/utils/SkeletonUtils.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/cannon@0.6.2/build/cannon.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.150.0/examples/js/xr/VRButton.js"></script>
 
-    <script type="module">
-        import { VRButton } from 'https://cdn.jsdelivr.net/npm/three@0.150.0/examples/jsm/webxr/VRButton.js';
+    <script>
+        /**
+         * 1. 物理エンジン & 3Dシーンの設定
+         */
+        const world = new CANNON.World();
+        world.gravity.set(0, -9.82, 0); // 重力の設定
 
-        let scene, camera, renderer, world, cubeMesh, cubeBody;
-        let isCalibrated = false, calibCount = 0, referenceZ = 0;
-        let lastStableZ = 0;
-        const tipMeshes = [], tipBodies = [];
-        const CONFIG = { spread: 1.8, vertical: 1.5, zOffset: -0.25, lerp: 0.3 };
-        const _v = new THREE.Vector3();
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.xr.enabled = true;
+        document.body.appendChild(renderer.domElement);
+        document.body.appendChild(THREE.VRButton.createButton(renderer));
 
-        async function startSystem() {
-            // Hide setup UI
-            document.getElementById('setup-ui').style.display = 'none';
+        // 照明と床
+        scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+        dirLight.position.set(5, 10, 7);
+        scene.add(dirLight);
 
-            // --- Init Three.js ---
-            scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x050505);
-            scene.add(new THREE.GridHelper(20, 20, 0x444444, 0x222222));
+        const floorGeo = new THREE.PlaneGeometry(10, 10);
+        const floorMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+        const floor = new THREE.Mesh(floorGeo, floorMat);
+        floor.rotation.x = -Math.PI / 2;
+        scene.add(floor);
 
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.01, 100);
-            renderer = new THREE.WebGLRenderer({ antialias: true });
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.xr.enabled = true;
-            document.body.appendChild(renderer.domElement);
+        const floorBody = new CANNON.Body({ mass: 0, shape: new CANNON.Plane() });
+        floorBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
+        world.addBody(floorBody);
 
-            // Add VR Button
-            document.getElementById('vr-btn-container').appendChild(VRButton.createButton(renderer));
+        /**
+         * 2. 物理演算オブジェクト（インタラクト用）
+         */
+        const boxes = [];
+        for(let i=0; i<10; i++) {
+            const size = 0.1;
+            const geo = new THREE.BoxGeometry(size, size, size);
+            const mat = new THREE.MeshStandardMaterial({ color: Math.random() * 0xffffff });
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.set(Math.random()-0.5, 1, -0.5);
+            scene.add(mesh);
 
-            scene.add(new THREE.AmbientLight(0xffffff, 1.0));
+            const body = new CANNON.Body({ mass: 1, shape: new CANNON.Box(new CANNON.Vec3(size/2, size/2, size/2)) });
+            body.position.copy(mesh.position);
+            world.addBody(body);
+            boxes.push({ mesh, body });
+        }
 
-            // --- Init Physics ---
-            world = new CANNON.World();
-            world.gravity.set(0, -9.8, 0);
-            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.2), new THREE.MeshStandardMaterial({ color: 0x00ffaa }));
-            scene.add(cubeMesh);
-            cubeBody = new CANNON.Body({ mass: 0.1 });
-            cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.1, 0.1, 0.1)));
-            cubeBody.position.set(0, 1.6, -0.6);
-            world.addBody(cubeBody);
+        /**
+         * 3. ハンドトラッキング用 Kinematic剛体 (指先)
+         */
+        const fingerBodies = [];
+        const fingerMeshes = [];
+        // 5本の指の先端を物理化
+        for(let i=0; i<5; i++) {
+            const body = new CANNON.Body({ mass: 0, shape: new CANNON.Sphere(0.02), type: CANNON.Body.KINEMATIC });
+            world.addBody(body);
+            fingerBodies.push(body);
 
-            const jGeo = new THREE.SphereGeometry(0.015, 8, 4);
-            for (let i = 0; i < 21; i++) {
-                const m = new THREE.Mesh(jGeo, new THREE.MeshBasicMaterial({ color: 0xffffff }));
-                scene.add(m);
-                tipMeshes.push(m);
-                const b = new CANNON.Body({ mass: 0, type: CANNON.Body.KINEMATIC });
-                b.addShape(new CANNON.Sphere(0.015));
-                world.addBody(b);
-                tipBodies.push(b);
+            const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.02), new THREE.MeshBasicMaterial({color: 0x00ff00}));
+            scene.add(mesh);
+            fingerMeshes.push(mesh);
+        }
+
+        /**
+         * 4. MediaPipe Hands 設定とロジック
+         */
+        let rawHandData = null;
+        const hands = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
+
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.7,
+            minTrackingConfidence: 0.7
+        });
+
+        hands.onResults((results) => {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                rawHandData = results.multiHandLandmarks[0];
+            } else {
+                rawHandData = null;
+            }
+        });
+
+        // カメラフィード（不可視）
+        const videoElement = document.createElement('video');
+        const cameraUtils = new Camera(videoElement, {
+            onFrame: async () => { await hands.send({image: videoElement}); },
+            width: 640, height: 480
+        });
+        cameraUtils.start();
+
+        /**
+         * 5. アンチ・ワープ & 物理同期ループ
+         */
+        function updatePhysics() {
+            world.step(1/60);
+
+            if (rawHandData) {
+                // 手のひら中心(基準点)の算出: Index, Middle, Ring, Pinkyの付け根平均
+                const p1 = rawHandData[5], p2 = rawHandData[9], p3 = rawHandData[13], p4 = rawHandData[17];
+                const palmCenter = {
+                    x: (p1.x + p2.x + p3.x + p4.x) / 4,
+                    y: (p1.y + p2.y + p3.y + p4.y) / 4,
+                    z: (p1.z + p2.z + p3.z + p4.z) / 4
+                };
+
+                // 指先のインデックス: 4(親指), 8(人差), 12(中), 16(薬), 20(小)
+                const tips = [4, 8, 12, 16, 20];
+                
+                tips.forEach((index, i) => {
+                    const tipData = rawHandData[index];
+                    
+                    // 座標変換 (MediaPipe 0~1 -> Three.js 空間)
+                    // Z軸は palmCenter からの相対値で安定させる
+                    const targetX = (tipData.x - 0.5) * 2;
+                    const targetY = -(tipData.y - 0.5) * 2 + 1.2; // 少し上にオフセット
+                    const targetZ = tipData.z * 2 - 0.5;
+
+                    // Lerp (線形補間) による滑らかな追従
+                    fingerBodies[i].position.x += (targetX - fingerBodies[i].position.x) * 0.3;
+                    fingerBodies[i].position.y += (targetY - fingerBodies[i].position.y) * 0.3;
+                    fingerBodies[i].position.z += (targetZ - fingerBodies[i].position.z) * 0.3;
+
+                    fingerMeshes[i].position.copy(fingerBodies[i].position);
+                });
+            } else {
+                // 手が映っていない時は画面外へ
+                fingerBodies.forEach(b => b.position.set(0, -10, 0));
             }
 
-            // --- Init MediaPipe ---
-            const video = document.getElementById('input_video');
-            const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
-            hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
-
-            hands.onResults((results) => {
-                if (!results.multiHandLandmarks?.length) return;
-                const lm = results.multiHandLandmarks[0];
-                const xrCamera = renderer.xr.getCamera(camera);
-                const palmAvgZ = (lm[5].z + lm[9].z + lm[13].z + lm[17].z) * 0.25;
-
-                if (!isCalibrated && renderer.xr.isPresenting) {
-                    calibCount++;
-                    referenceZ = Math.max(referenceZ, Math.abs(palmAvgZ));
-                    if (calibCount > 40) isCalibrated = true;
-                    return;
-                }
-
-                if (isCalibrated) {
-                    const depthScale = 0.85 / referenceZ;
-                    let targetZ = -palmAvgZ * depthScale;
-                    if (lastStableZ === 0) lastStableZ = targetZ;
-                    targetZ = lastStableZ + (targetZ - lastStableZ) * CONFIG.lerp;
-                    lastStableZ = targetZ;
-
-                    lm.forEach((point, i) => {
-                        const pCorr = 1.0 - (point.z * 0.4);
-                        _v.set(
-                            (point.x - 0.5) * CONFIG.spread * pCorr,
-                            -(point.y - 0.5) * CONFIG.vertical * pCorr,
-                            targetZ + (point.z - palmAvgZ) * depthScale + CONFIG.zOffset
-                        ).applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
-                        
-                        tipBodies[i].position.lerp(new CANNON.Vec3(_v.x, _v.y, _v.z), CONFIG.lerp, tipBodies[i].position);
-                        tipMeshes[i].position.copy(tipBodies[i].position);
-                    });
-                }
-            });
-
-            // Start Camera (Triggered by button click)
-            const cameraUtils = new Camera(video, {
-                onFrame: async () => { await hands.send({ image: video }); },
-                facingMode: "environment", width: 640, height: 360
-            });
-            await cameraUtils.start();
-
-            renderer.setAnimationLoop(() => {
-                if (isCalibrated) {
-                    world.step(1/60);
-                    cubeMesh.position.copy(cubeBody.position);
-                    cubeMesh.quaternion.copy(cubeBody.quaternion);
-                }
-                renderer.render(scene, camera);
+            // ボックスの描画同期
+            boxes.forEach(obj => {
+                obj.mesh.position.copy(obj.body.position);
+                obj.mesh.quaternion.copy(obj.body.quaternion);
             });
         }
 
-        document.getElementById('activate-btn').addEventListener('click', startSystem);
+        /**
+         * 6. メインレンダリングループ
+         */
+        renderer.setAnimationLoop(() => {
+            updatePhysics();
+            renderer.render(scene, camera);
+        });
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
     </script>
 </body>
 </html>
