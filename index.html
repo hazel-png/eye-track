@@ -6,6 +6,8 @@
     <title>Simple VR Desk with Hand Tracking</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
         #vr-ui {
@@ -14,22 +16,23 @@
             background: #000; z-index: 2000;
         }
         .btn { background: #fff; color: #000; border: none; padding: 20px 40px; border-radius: 50px; font-size: 20px; font-weight: bold; cursor: pointer; }
+        /* カメラ映像は計算に使うだけで表示は隠す */
+        #input-video { position: fixed; width: 1px; height: 1px; opacity: 0; }
     </style>
 </head>
 <body>
-    <div id="vr-ui"><button class="btn" id="start-btn">START VR</button></div>
+    <div id="vr-ui"><button class="btn" id="start-btn">START VR & HAND CAMERA</button></div>
+    <video id="input-video"></video>
 
     <script type="module">
-        // XRHandModelFactoryをインポートして手の見た目を自動生成
         import { VRButton } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/webxr/VRButton.js';
-        import { XRHandModelFactory } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/webxr/XRHandModelFactory.js';
 
-        let scene, camera, renderer, world, cubeMesh, cubeBody, deskGroup;
-        const handModels = [];
+        let scene, camera, renderer, world, cubeMesh, cubeBody;
+        let handJoints = []; // 手の関節を表示するメッシュの配列
+        const videoElement = document.getElementById('input-video');
 
         function init() {
-            const ui = document.getElementById('vr-ui');
-            if(ui) ui.remove();
+            document.getElementById('vr-ui').remove();
 
             // --- Three.js Setup ---
             scene = new THREE.Scene();
@@ -39,71 +42,110 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
-            
-            // WebXRのハンドトラッキング機能を有効化してボタン作成
             document.body.appendChild(VRButton.createButton(renderer));
-
-            // --- Hand Tracking Setup ---
-            const handModelFactory = new XRHandModelFactory();
-
-            // 左手・右手のコントローラー（ハンド）を取得
-            for (let i = 0; i < 2; i++) {
-                const controller = renderer.xr.getController(i);
-                scene.add(controller);
-
-                const hand = renderer.xr.getHand(i);
-                // 手のモデル（指の関節など）を追加
-                hand.add(handModelFactory.createHandModel(hand, "boxes")); // "spheres" や "boxes" が指定可能
-                scene.add(hand);
-                handModels.push(hand);
-            }
 
             // --- Physics ---
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
 
             // --- Objects ---
-            deskGroup = new THREE.Group();
+            // Desk
             const deskMesh = new THREE.Mesh(
                 new THREE.BoxGeometry(1.2, 0.05, 0.6), 
                 new THREE.MeshStandardMaterial({ color: 0x333333 })
             );
             deskMesh.position.set(0, 0.8, -0.5);
-            deskGroup.add(deskMesh);
-            scene.add(deskGroup);
+            scene.add(deskMesh);
 
             const deskBody = new CANNON.Body({ mass: 0 });
             deskBody.addShape(new CANNON.Box(new CANNON.Vec3(0.6, 0.025, 0.3)));
             deskBody.position.set(0, 0.8, -0.5);
             world.addBody(deskBody);
 
+            // Cube
             cubeMesh = new THREE.Mesh(
-                new THREE.BoxGeometry(0.08, 0.08, 0.08), 
+                new THREE.BoxGeometry(0.1, 0.1, 0.1), 
                 new THREE.MeshStandardMaterial({ color: 0x4285F4 })
             );
             scene.add(cubeMesh);
 
             cubeBody = new CANNON.Body({ mass: 0.2 });
-            cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.04, 0.04, 0.04)));
+            cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.05, 0.05, 0.05)));
             cubeBody.position.set(0, 1.2, -0.5);
             world.addBody(cubeBody);
 
+            // Hand Visuals (手の関節21箇所分)
+            const jointGeo = new THREE.SphereGeometry(0.015);
+            const jointMat = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
+            for (let i = 0; i < 21; i++) {
+                const joint = new THREE.Mesh(jointGeo, jointMat);
+                joint.visible = false;
+                scene.add(joint);
+                handJoints.push(joint);
+            }
+
             // Light
-            const light = new THREE.DirectionalLight(0xffffff, 1.0);
-            light.position.set(1, 2, 1);
-            scene.add(light);
+            scene.add(new THREE.DirectionalLight(0xffffff, 1.0));
             scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+
+            // --- MediaPipe Hands Setup ---
+            const hands = new Hands({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+            });
+
+            hands.setOptions({
+                maxNumHands: 1,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.5,
+                minTrackingConfidence: 0.5
+            });
+
+            hands.onResults(onResults);
+
+            const cameraPipe = new Camera(videoElement, {
+                onFrame: async () => {
+                    await hands.send({image: videoElement});
+                },
+                width: 640,
+                height: 480
+            });
+            cameraPipe.start();
 
             // --- Animation Loop ---
             renderer.setAnimationLoop(() => {
-                if (!renderer.xr.isPresenting) return;
-                
                 world.step(1/60);
                 cubeMesh.position.copy(cubeBody.position);
                 cubeMesh.quaternion.copy(cubeBody.quaternion);
-                
                 renderer.render(scene, camera);
             });
+        }
+
+        // --- Hand Tracking Processing ---
+        function onResults(results) {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+                
+                landmarks.forEach((point, i) => {
+                    // カメラの座標系(0~1)をVR空間の座標系に変換
+                    // 注意: スマホを横持ち/縦持ち、VRゴーグル越しに見る場合で座標調整が必要
+                    const x = (point.x - 0.5) * 1.5; // 左右
+                    const y = (0.5 - point.y) * 1.5 + 1.0; // 上下（高さ調整）
+                    const z = (point.z - 0.5); // 前後
+
+                    handJoints[i].position.set(x, y, z - 0.4); 
+                    handJoints[i].visible = true;
+
+                    // 人差し指の先(8番)でキューブを弾く簡易物理干渉
+                    if (i === 8) {
+                        const dist = handJoints[i].position.distanceTo(cubeMesh.position);
+                        if (dist < 0.1) {
+                            cubeBody.applyImpulse(new CANNON.Vec3(0, 0.1, -0.1), cubeBody.position);
+                        }
+                    }
+                });
+            } else {
+                handJoints.forEach(j => j.visible = false);
+            }
         }
 
         document.getElementById('start-btn').addEventListener('click', init);
