@@ -3,87 +3,105 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>WebXR Magic Hands Pro</title>
+    <title>Magic Hands VR - Full Edition</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
     <style>
+        :root { --ios-blue: #007AFF; --ios-green: #34C759; }
         body { margin: 0; overflow: hidden; background: #000; font-family: -apple-system, sans-serif; }
         #overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            display: flex; align-items: center; justify-content: center;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
             background: radial-gradient(circle at center, #1a1a1a 0%, #000 100%);
-            z-index: 2000; color: white;
+            z-index: 2000; color: white; text-align: center;
+        }
+        .ios-card {
+            background: rgba(255, 255, 255, 0.1); backdrop-filter: blur(20px);
+            padding: 30px; border-radius: 30px; border: 1px solid rgba(255, 255, 255, 0.1);
+            width: 80%; max-width: 300px;
         }
         .ios-btn {
-            background: #007AFF; color: white; border: none; padding: 20px 40px;
-            border-radius: 20px; font-size: 20px; font-weight: 600; cursor: pointer;
-            box-shadow: 0 10px 30px rgba(0, 122, 255, 0.4);
-            transition: transform 0.2s;
+            background: var(--ios-blue); color: white; border: none; padding: 18px 0;
+            width: 100%; border-radius: 15px; font-size: 18px; font-weight: 600;
+            cursor: pointer; box-shadow: 0 10px 25px rgba(0, 122, 255, 0.3);
         }
-        .ios-btn:active { transform: scale(0.95); }
+        #input_video { display: none; }
     </style>
 </head>
 <body>
     <div id="overlay">
-        <button class="ios-btn" id="start-btn">VR空間へエントリー</button>
+        <div class="ios-card">
+            <h2 style="margin-top:0">Magic Hands</h2>
+            <p style="font-size:14px; opacity:0.8;">1. ボタンを押してVRモードへ<br>2. 目の前の青い球体に手を重ねる<br>3. そのまま腕を伸ばして2秒待機</p>
+            <button class="ios-btn" id="start-btn">VRを開始</button>
+        </div>
     </div>
     <video id="input_video" playsinline></video>
 
     <script type="module">
         import { VRButton } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/webxr/VRButton.js';
 
+        // --- 全体設定 ---
+        const CONFIG = {
+            sensitivity: 3.8,  // 奥行き感度
+            power: 0.82,       // 遠くの解像度補正
+            baseOffset: -0.4,  // 手の基準位置
+            lerp: 0.38,        // 滑らかさ
+            calibDist: 0.18    // キャリブ判定距離
+        };
+
         let scene, camera, renderer, world, cubeMesh, cubeBody;
         let calibSphere, isCalibrating = false, calibComplete = false;
-        let maxReachZ = 0.15; // 初期推定値
+        let isHandVisible = false, maxReachZ = 0.15, currentRawZ = 0;
         const fingers = [];
         const dt = 1/60;
-
-        // --- 奥行き再現度向上のための設定 ---
-        const DEPTH_CONFIG = {
-            sensitivity: 3.5,  // 奥行きの総スケール
-            power: 0.85,       // 指数補正：1.0以下で遠くの解像度を上げる
-            baseOffset: -0.5,  // 手の開始深度
-            lerp: 0.35         // 滑らかさ（低いほど吸い付くが震えやすい）
-        };
 
         function vibrate(ms) { if (navigator.vibrate) navigator.vibrate(ms); }
 
         async function init() {
             document.getElementById('overlay').remove();
 
+            // --- Three.js Setup ---
             scene = new THREE.Scene();
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
-            document.body.appendChild(VRButton.createButton(renderer));
+            
+            const vrBtn = VRButton.createButton(renderer);
+            vrBtn.style.borderRadius = "12px";
+            document.body.appendChild(vrBtn);
 
+            // --- Cannon.js Setup ---
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
 
-            // キャリブ用ターゲット（iOSブルー）
+            // キャリブレーション用オブジェクト
             calibSphere = new THREE.Mesh(
-                new THREE.SphereGeometry(0.07, 32, 32),
-                new THREE.MeshStandardMaterial({ color: 0x007AFF, transparent: true, opacity: 0.5 })
+                new THREE.SphereGeometry(0.08, 32, 32),
+                new THREE.MeshStandardMaterial({ color: 0x007AFF, transparent: true, opacity: 0.2 })
             );
-            calibSphere.position.set(0, 1.3, -0.4);
+            calibSphere.position.set(0, 1.25, -0.45);
             scene.add(calibSphere);
 
             // 物理オブジェクト
             cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.12), new THREE.MeshStandardMaterial({ color: 0xffffff }));
             cubeMesh.visible = false;
             scene.add(cubeMesh);
-            cubeBody = new CANNON.Body({ mass: 0.8 });
+            cubeBody = new CANNON.Body({ mass: 0.5 });
             cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.06, 0.06, 0.06)));
             cubeBody.position.set(0, 1.6, -0.6);
             world.addBody(cubeBody);
 
             scene.add(new THREE.AmbientLight(0xffffff, 1.2));
+            const sun = new THREE.DirectionalLight(0xffffff, 0.5);
+            sun.position.set(5, 10, 5);
+            scene.add(sun);
 
-            // 指の作成
+            // 指先（21点）
             for (let i = 0; i < 21; i++) {
                 const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.015, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffffff }));
                 scene.add(mesh);
@@ -93,69 +111,71 @@
                 fingers.push({ mesh, body });
             }
 
+            // --- MediaPipe Hands ---
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
-            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7 });
+            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
 
             hands.onResults((results) => {
-                if (!results.multiHandLandmarks?.length) return;
-                const landmarks = results.multiHandLandmarks[0];
                 const xrCamera = renderer.xr.getCamera(camera);
+                
+                if (!results.multiHandLandmarks?.length) {
+                    if (isHandVisible) {
+                        isHandVisible = false;
+                        calibSphere.material.opacity = 0.2;
+                    }
+                    fingers.forEach(f => f.body.position.set(0, -100, 0));
+                    return;
+                }
 
-                // 【改善1】手のひら中心を基準点にする (Landmark 5,9,13,17の平均)
+                // 手の認識成功
+                if (!isHandVisible) {
+                    isHandVisible = true;
+                    vibrate(25);
+                    calibSphere.material.opacity = 0.7;
+                }
+
+                const landmarks = results.multiHandLandmarks[0];
+                currentRawZ = landmarks[0].z;
+
+                // 手のひら重心の算出
                 const p1 = landmarks[5], p2 = landmarks[9], p3 = landmarks[13], p4 = landmarks[17];
-                const palmCenterRaw = {
+                const palmCenter = {
                     x: (p1.x + p2.x + p3.x + p4.x) / 4,
                     y: (p1.y + p2.y + p3.y + p4.y) / 4,
                     z: (p1.z + p2.z + p3.z + p4.z) / 4
                 };
 
-                // 【改善2】指数スケーリングによる奥行き補正
-                let rawZ = Math.abs(palmCenterRaw.z);
-                let adjustedZ;
-                if (calibComplete) {
-                    // キャリブ値を1.0とした相対距離
-                    adjustedZ = Math.pow(rawZ / maxReachZ, DEPTH_CONFIG.power) * DEPTH_CONFIG.sensitivity;
-                } else {
-                    adjustedZ = rawZ * 5.0; // 未キャリブ時の仮設定
-                }
+                // 奥行き補正
+                let rawZ = Math.abs(palmCenter.z);
+                let adjustedZ = calibComplete 
+                    ? Math.pow(rawZ / maxReachZ, CONFIG.power) * CONFIG.sensitivity 
+                    : rawZ * 5.0;
 
                 landmarks.forEach((point, i) => {
                     const f = fingers[i];
-                    
-                    // 【改善3】手のひら重心からの相対座標計算
-                    const relX = (point.x - palmCenterRaw.x) * 1.8;
-                    const relY = (point.y - palmCenterRaw.y) * 1.8;
-                    const relZ = (point.z - palmCenterRaw.z) * 1.5;
+                    // 相対座標マッピング
+                    const relX = (point.x - palmCenter.x) * 1.8;
+                    const relY = (point.y - palmCenter.y) * 1.8;
+                    const relZ = (point.z - palmCenter.z) * 1.5;
 
                     const _v = new THREE.Vector3(
-                        (palmCenterRaw.x - 0.5) * 2.2 + relX,
-                        -(palmCenterRaw.y - 0.5) * 2.2 + relY,
-                        -adjustedZ + relZ + DEPTH_CONFIG.baseOffset
+                        (palmCenter.x - 0.5) * 2.2 + relX,
+                        -(palmCenter.y - 0.5) * 2.2 + relY,
+                        -adjustedZ + relZ + CONFIG.baseOffset
                     );
 
                     _v.applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
                     
-                    // Lerpで滑らかに移動
-                    f.body.position.x += (_v.x - f.body.position.x) * DEPTH_CONFIG.lerp;
-                    f.body.position.y += (_v.y - f.body.position.y) * DEPTH_CONFIG.lerp;
-                    f.body.position.z += (_v.z - f.body.position.z) * DEPTH_CONFIG.lerp;
+                    f.body.position.x += (_v.x - f.body.position.x) * CONFIG.lerp;
+                    f.body.position.y += (_v.y - f.body.position.y) * CONFIG.lerp;
+                    f.body.position.z += (_v.z - f.body.position.z) * CONFIG.lerp;
                     f.mesh.position.copy(f.body.position);
                 });
 
-                // VR内キャリブレーション判定
+                // キャリブ判定
                 if (!calibComplete && !isCalibrating) {
-                    if (fingers[8].body.position.distanceTo(calibSphere.position) < 0.08) {
-                        isCalibrating = true;
-                        vibrate(15);
-                        calibSphere.material.color.set(0xff3b30);
-                        setTimeout(() => {
-                            maxReachZ = Math.abs(palmCenterRaw.z);
-                            calibComplete = true;
-                            calibSphere.visible = false;
-                            cubeMesh.visible = true;
-                            vibrate([40, 30, 40]);
-                        }, 2000); // 2秒静止でキャリブ
-                    }
+                    const dist = fingers[8].body.position.distanceTo(calibSphere.position);
+                    if (dist < CONFIG.calibDist) startCalib();
                 }
             });
 
@@ -173,6 +193,27 @@
                 }
                 renderer.render(scene, camera);
             });
+        }
+
+        function startCalib() {
+            isCalibrating = true;
+            vibrate(15);
+            calibSphere.material.color.set(0x34C759); // Green
+            
+            let startTime = Date.now();
+            const timer = setInterval(() => {
+                let progress = (Date.now() - startTime) / 2000;
+                calibSphere.scale.set(1 - progress, 1 - progress, 1 - progress);
+                
+                if (progress >= 1.0) {
+                    clearInterval(timer);
+                    maxReachZ = Math.abs(currentRawZ);
+                    calibComplete = true;
+                    calibSphere.visible = false;
+                    cubeMesh.visible = true;
+                    vibrate([50, 30, 50]);
+                }
+            }, 50);
         }
 
         document.getElementById('start-btn').addEventListener('click', init);
