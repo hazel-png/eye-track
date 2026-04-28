@@ -3,133 +3,96 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>Full Pseudo VR Pro</title>
-
+<title>Ultimate Pseudo VR</title>
 <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-
 <style>
-body { margin:0; overflow:hidden; background:black; font-family: sans-serif; }
-#overlay {
-    position:fixed; inset:0; display:flex; justify-content:center; align-items:center;
-    background:rgba(255,255,255,0.95); z-index:100;
-}
-#panel { text-align:center; padding:20px; }
-button {
-    font-size:22px; padding:15px 40px; border:none; border-radius:30px;
-    background:#4285F4; color:white; cursor:pointer; box-shadow:0 4px 10px rgba(0,0,0,0.2);
-}
-#hud {
-    position:fixed; top:20px; left:20px; right:20px; display:flex;
-    justify-content:space-between; z-index:50; pointer-events:none;
-}
-#status {
-    background:rgba(0,0,0,0.7); color:#00ffcc; padding:8px 15px;
-    border-radius:20px; font-size:14px; font-weight:bold;
-}
-/* ステレオ用クロスヘア（左右に配置） */
-.crosshair {
-    position:fixed; top:50%; width:10px; height:10px;
-    border:2px solid rgba(255,255,255,0.5); border-radius:50%;
-    transform:translate(-50%,-50%); z-index:50;
-}
-#ch-left { left: 25%; }
-#ch-right { left: 75%; }
+    body { margin:0; overflow:hidden; background:#000; font-family:sans-serif; }
+    #overlay {
+        position:fixed; inset:0; display:flex; justify-content:center; align-items:center;
+        background:linear-gradient(45deg, #1a1a1a, #000); z-index:100; color:white;
+    }
+    #panel { text-align:center; }
+    .start-btn {
+        font-size:24px; padding:20px 60px; border:none; border-radius:50px;
+        background:#4285F4; color:white; cursor:pointer; font-weight:bold;
+        box-shadow: 0 0 20px rgba(66,133,244,0.5); transition: 0.3s;
+    }
+    .start-btn:hover { transform: scale(1.05); background:#5a95f5; }
+    #hud {
+        position:fixed; top:20px; width:100%; display:flex; justify-content:space-around;
+        z-index:50; pointer-events:none; font-size:14px; color:#00ffcc; text-shadow: 0 0 5px #000;
+    }
 </style>
 </head>
 <body>
 
 <div id="overlay">
-  <div id="panel">
-    <h1>FULL PSEUDO VR</h1>
-    <button id="start">START EXPERIENCE</button>
-    <p>1. STARTを押し、2. 画面を横向きに<br>3. 腕を前に伸ばしてキャリブレーション</p>
-  </div>
+    <div id="panel">
+        <h1 style="letter-spacing: 5px;">ULTIMATE VR</h1>
+        <button class="start-btn" id="start-btn">ENGAGE VR</button>
+        <p style="opacity:0.6; margin-top:20px;">Landscape & Fullscreen will be forced.</p>
+    </div>
 </div>
 
 <div id="hud">
-  <div id="status">INITIALIZING...</div>
+    <div id="status-l">GYRO: ACTIVE</div>
+    <div id="status-r">HANDS: SCANNING</div>
 </div>
-
-<div id="ch-left" class="crosshair"></div>
-<div id="ch-right" class="crosshair"></div>
 
 <video id="video" playsinline style="display:none;"></video>
 
 <script type="module">
 let scene, renderer, camera;
 let handMeshes = [];
-let grabbableObjects = [];
-let velocityZ = 0;
-let isCalibrated = false;
-let reachZ = 1.0;
+const worldQuaternion = new THREE.Quaternion();
+const deviceQuaternion = new THREE.Quaternion();
+const sensorQuaternion = new THREE.Quaternion();
 
-const eyeOffset = 0.035; // 瞳孔間距離
+// 座標系補正用の定数
+const zee = new THREE.Vector3(0, 0, 1);
+const euler = new THREE.Euler();
+const q0 = new THREE.Quaternion();
+const q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5)); // -90deg X
 
 function init() {
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x111111);
-    scene.fog = new THREE.Fog(0x111111, 1, 10);
-
-    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.01, 100);
-    camera.position.set(0, 1.2, 0);
-
-    renderer = new THREE.WebGLRenderer({ antialias: true });
+    scene.background = new THREE.Color(0x050505);
+    
+    // 超広角で見やすく設定
+    camera = new THREE.PerspectiveCamera(85, window.innerWidth / window.innerHeight, 0.01, 100);
+    
+    renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
     document.body.appendChild(renderer.domElement);
 
-    // ライティング
-    const light = new THREE.DirectionalLight(0xffffff, 1);
-    light.position.set(1, 2, 1);
-    scene.add(light);
-    scene.add(new THREE.AmbientLight(0x404040));
-
-    // 地面（グリッド＋床）
-    const grid = new THREE.GridHelper(20, 40, 0x00ffcc, 0x333333);
+    // 宇宙空間のようなグリッド
+    const grid = new THREE.GridHelper(100, 100, 0x444444, 0x111111);
     scene.add(grid);
-    
-    // 物体作成
-    const boxGeo = new THREE.BoxGeometry(0.15, 0.15, 0.15);
-    for(let i=0; i<8; i++) {
-        const mat = new THREE.MeshStandardMaterial({ color: Math.random() * 0xffffff });
-        const mesh = new THREE.Mesh(boxGeo, mat);
-        mesh.position.set((Math.random()-0.5)*2, 0.5 + Math.random(), -1 - Math.random()*2);
-        scene.add(mesh);
-        grabbableObjects.push(mesh);
-    }
 
-    // 手のジョイント
-    const jointGeo = new THREE.SphereGeometry(0.015, 8, 8);
-    const jointMat = new THREE.MeshBasicMaterial({ color: 0x00ffcc });
+    // ライティング
+    const pLight = new THREE.PointLight(0xffffff, 2, 20);
+    pLight.position.set(0, 5, 0);
+    scene.add(pLight);
+    scene.add(new THREE.AmbientLight(0x222222));
+
+    // 指のジョイント初期化
+    const jointGeo = new THREE.SphereGeometry(0.012, 8, 8);
     for(let i=0; i<21; i++) {
-        const m = new THREE.Mesh(jointGeo, jointMat);
+        const m = new THREE.Mesh(jointGeo, new THREE.MeshBasicMaterial({ color: 0x00ffcc }));
         scene.add(m);
         handMeshes.push(m);
     }
 
-    window.addEventListener('resize', onWindowResize);
     animate();
-}
-
-function onWindowResize() {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
 function animate() {
     requestAnimationFrame(animate);
     
-    // 慣性移動
-    camera.position.z += velocityZ;
-    velocityZ *= 0.95;
-
-    renderStereo();
-}
-
-function renderStereo() {
+    // ステレオレンダリング（最高効率）
     const w = window.innerWidth / 2;
     const h = window.innerHeight;
     renderer.setScissorTest(true);
@@ -137,81 +100,88 @@ function renderStereo() {
     // 左目
     renderer.setViewport(0, 0, w, h);
     renderer.setScissor(0, 0, w, h);
-    camera.position.x -= eyeOffset;
+    camera.position.x = -0.035;
     renderer.render(scene, camera);
-    camera.position.x += eyeOffset;
 
     // 右目
     renderer.setViewport(w, 0, w, h);
     renderer.setScissor(w, 0, w, h);
-    camera.position.x += eyeOffset;
+    camera.position.x = 0.035;
     renderer.render(scene, camera);
-    camera.position.x -= eyeOffset;
 
     renderer.setScissorTest(false);
 }
 
-// ジャイロ制御（デバイスの向きをカメラに反映）
-window.addEventListener("deviceorientation", (e) => {
+// ==========================================
+// 最高峰ジャイロ制御 (Sensor Fusion Logic)
+// ==========================================
+function updateOrientation(e) {
     if (!e.alpha) return;
+
+    // 度をラジアンに変換
     const alpha = THREE.MathUtils.degToRad(e.alpha);
     const beta = THREE.MathUtils.degToRad(e.beta);
     const gamma = THREE.MathUtils.degToRad(e.gamma);
-
     const orient = window.orientation ? THREE.MathUtils.degToRad(window.orientation) : 0;
+
+    // オイラー角からクォータニオンを生成 (iOS/Android両対応)
+    euler.set(beta, alpha, -gamma, 'YXZ');
+    deviceQuaternion.setFromEuler(euler);
     
-    // 簡易クォータニオン回転（スマートフォンの向きに合わせる）
-    const zee = new THREE.Vector3(0, 0, 1);
-    const euler = new THREE.Euler(beta, alpha, -gamma, 'YXZ');
-    camera.quaternion.setFromEuler(euler);
-});
+    // 画面の回転（横持ち）を補正
+    q0.setFromAxisAngle(zee, -orient);
+    deviceQuaternion.multiply(q0);
+    
+    // カメラの初期向き（正面）を補正
+    deviceQuaternion.multiply(q1);
 
-// ハンドトラッキング
-async function setupHands(video) {
-    const hands = new Hands({
-        locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
-    });
+    // 滑らかに追従
+    camera.quaternion.slerp(deviceQuaternion, 0.2);
+}
 
-    hands.setOptions({
-        maxNumHands: 1,
-        modelComplexity: 1,
-        minDetectionConfidence: 0.8,
-        minTrackingConfidence: 0.8
-    });
+// ==========================================
+// 強制設定（FullScreen & Orientation）
+// ==========================================
+async function forceVRMode() {
+    const doc = document.documentElement;
 
+    // 1. フルスクリーン化
+    if (doc.requestFullscreen) {
+        await doc.requestFullscreen();
+    } else if (doc.webkitRequestFullscreen) {
+        await doc.webkitRequestFullscreen();
+    }
+
+    // 2. 横画面固定 (Screen Orientation API)
+    if (screen.orientation && screen.orientation.lock) {
+        await screen.orientation.lock('landscape').catch(e => console.log("Orientation lock ignored"));
+    }
+
+    // 3. ジャイロ許可 (iOS)
+    if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+        await DeviceOrientationEvent.requestPermission();
+    }
+}
+
+// スタートボタン
+document.getElementById("start-btn").onclick = async () => {
+    await forceVRMode();
+    document.getElementById("overlay").style.display = "none";
+    
+    init();
+    window.addEventListener("deviceorientation", updateOrientation, true);
+    
+    // ハンドトラッキング（外カメラ）
+    const video = document.getElementById("video");
+    const hands = new Hands({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+    hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.8 });
     hands.onResults(res => {
-        if (!res.multiHandLandmarks || res.multiHandLandmarks.length === 0) return;
-        const landmarks = res.multiHandLandmarks[0];
-
-        // 自動キャリブレーション：手首の深度(Z)が一定以上遠ければリーチを設定
-        if (!isCalibrated && landmarks[0].z < -0.15) {
-            reachZ = Math.abs(1.0 / landmarks[0].z) * 0.15;
-            isCalibrated = true;
-            document.getElementById("status").innerText = "CALIBRATED";
-        }
-
-        const statusEl = document.getElementById("status");
-        
-        landmarks.forEach((p, i) => {
-            const m = handMeshes[i];
-            // カメラ座標からワールド座標への変換
-            const x = (p.x - 0.5) * 1.5;
-            const y = -(p.y - 0.5) * 1.5;
-            const z = -p.z * reachZ - 0.5;
-
-            // カメラの向きに合わせて手の位置を回転
-            const pos = new THREE.Vector3(x, y, z).applyQuaternion(camera.quaternion);
-            m.position.copy(camera.position).add(pos);
-        });
-
-        // インタラクション（掴む）
-        const indexTip = handMeshes[8].position;
-        grabbableObjects.forEach(obj => {
-            const dist = indexTip.distanceTo(obj.position);
-            if (dist < 0.15) {
-                obj.position.lerp(indexTip, 0.2); // 吸い付くような挙動
-                if (navigator.vibrate) navigator.vibrate(5);
-            }
+        if (!res.multiHandLandmarks?.length) return;
+        res.multiHandLandmarks[0].forEach((p, i) => {
+            // カメラの回転に合わせた手の位置計算
+            const rawPos = new THREE.Vector3((p.x-0.5)*1.8, -(p.y-0.5)*1.8, -p.z*1.5 - 0.4);
+            rawPos.applyQuaternion(camera.quaternion);
+            handMeshes[i].position.copy(camera.position).add(rawPos);
         });
     });
 
@@ -220,20 +190,6 @@ async function setupHands(video) {
         width: 1280, height: 720, facingMode: "environment"
     });
     cam.start();
-}
-
-document.getElementById("start").onclick = async () => {
-    // ジャイロの許可（iOS対策）
-    if (typeof DeviceOrientationEvent.requestPermission === 'function') {
-        await DeviceOrientationEvent.requestPermission();
-    }
-    
-    document.getElementById("overlay").style.display = "none";
-    const video = document.getElementById("video");
-    init();
-    setupHands(video);
-    
-    if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
 };
 </script>
 </body>
