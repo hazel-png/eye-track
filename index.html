@@ -1,162 +1,145 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ja">
 <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>WebXR - Back Camera Focus</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-    <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
-        video { display: none; }
-        #start-overlay {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            display: flex; flex-direction: column; align-items: center; justify-content: center;
-            background: white; z-index: 2000;
-        }
-        .btn {
-            background: #4285F4; color: white; border: none; padding: 25px 50px;
-            border-radius: 50px; font-size: 22px; cursor: pointer; box-shadow: 0 4px 15px rgba(0,0,0,0.2);
-        }
-        #status-text { margin-top: 20px; color: #555; font-size: 16px; }
-        #info-ui {
-            position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
-            padding: 15px 25px; background: rgba(0,0,0,0.8); color: white;
-            border-radius: 30px; z-index: 1000; text-align: center; display: none;
-        }
-    </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hand Tracking AR Fixed</title>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+<style>
+body { margin: 0; overflow: hidden; background: black; }
+#overlay {
+    position: fixed;
+    inset: 0;
+    background: white;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex-direction: column;
+    z-index: 10;
+}
+button {
+    font-size: 24px;
+    padding: 20px 40px;
+}
+</style>
 </head>
+
 <body>
-    <div id="start-overlay">
-        <button class="btn" id="start-btn">READY?</button>
-        <div id="status-text">Tap to start (Using Back Camera)</div>
-    </div>
-    <div id="info-ui">STRETCH YOUR ARM TO CALIBRATE</div>
-    <video id="input_video" playsinline></video>
 
-    <script type="module">
-        const SCALE_CONFIG = {
-            handSpread: 1.15, handVertical: 1.15, handDepth: 1.3,
-            zOffset: -0.1, fingerRadius: 0.012, isCalibrated: false
-        };
+<div id="overlay">
+    <button id="start">START</button>
+</div>
 
-        let scene, camera, renderer, world, cubeMesh, cubeBody, handsStarted = false;
-        let clickCount = 0;
-        const fingers = [];
-        const _v = new THREE.Vector3();
-        const dt = 1/60;
+<video id="video" playsinline style="display:none;"></video>
 
-        function setupScene() {
-            scene = new THREE.Scene();
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
-            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.xr.enabled = true;
-            document.body.appendChild(renderer.domElement);
+<script>
+let scene, camera, renderer;
+let videoTexture;
+let handMeshes = [];
 
-            world = new CANNON.World();
-            world.gravity.set(0, -9.8, 0);
-            
-            for (let i = 0; i < 21; i++) {
-                const mesh = new THREE.Mesh(new THREE.SphereGeometry(SCALE_CONFIG.fingerRadius, 8), new THREE.MeshBasicMaterial({ color: 0x00ffcc }));
-                scene.add(mesh);
-                const body = new CANNON.Body({ mass: 0, type: CANNON.Body.KINEMATIC });
-                body.addShape(new CANNON.Sphere(SCALE_CONFIG.fingerRadius));
-                world.addBody(body);
-                fingers.push({ mesh, body });
-            }
-            scene.add(new THREE.AmbientLight(0xffffff, 1.0));
+init();
 
-            // Desk and Cube (for interaction)
-            const deskMesh = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.05, 0.6), new THREE.MeshStandardMaterial({ color: 0x444444 }));
-            deskMesh.position.set(0, 1.0, -0.4);
-            scene.add(deskMesh);
-            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.08), new THREE.MeshStandardMaterial({ color: 0x4285F4 }));
-            scene.add(cubeMesh);
-            cubeBody = new CANNON.Body({ mass: 0.1 });
-            cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.04, 0.04, 0.04)));
-            cubeBody.position.set(0, 1.2, -0.4);
-            world.addBody(cubeBody);
+function init() {
+    scene = new THREE.Scene();
 
-            renderer.setAnimationLoop(() => {
-                world.step(dt);
-                if(cubeMesh) {
-                    cubeMesh.position.copy(cubeBody.position);
-                    cubeMesh.quaternion.copy(cubeBody.quaternion);
-                }
-                renderer.render(scene, camera);
-            });
-        }
+    camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.01, 10);
+    camera.position.z = 1;
 
-        async function startHandTracking() {
-            if (handsStarted) return;
-            const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
-            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
-            
-            hands.onResults((results) => {
-                if (!results.multiHandLandmarks?.length) return;
-                const xrCamera = renderer.xr.getCamera(camera);
-                const landmarks = results.multiHandLandmarks[0];
+    renderer = new THREE.WebGLRenderer({ alpha: true });
+    renderer.setSize(innerWidth, innerHeight);
+    document.body.appendChild(renderer.domElement);
 
-                if (!SCALE_CONFIG.isCalibrated && landmarks[0].z < -0.12) {
-                    SCALE_CONFIG.handDepth = Math.abs(1.0 / landmarks[0].z) * 0.18;
-                    SCALE_CONFIG.isCalibrated = true;
-                    document.getElementById('info-ui').innerText = "CALIBRATED!";
-                    setTimeout(() => document.getElementById('info-ui').style.display = 'none', 2000);
-                }
+    // 背景（カメラ映像）
+    const video = document.getElementById("video");
+    videoTexture = new THREE.VideoTexture(video);
+    scene.background = videoTexture;
 
-                landmarks.forEach((point, i) => {
-                    const f = fingers[i];
-                    let rX = (point.x - 0.5) * SCALE_CONFIG.handSpread;
-                    let rY = -(point.y - 0.5) * SCALE_CONFIG.handVertical;
-                    let rZ = -point.z * SCALE_CONFIG.handDepth + SCALE_CONFIG.zOffset;
-                    rZ = Math.max(-0.8, Math.min(0.1, rZ)); 
+    // 手のポイント
+    const geo = new THREE.SphereGeometry(0.02, 12, 12);
+    const mat = new THREE.MeshBasicMaterial({ color: 0x00ffcc });
 
-                    _v.set(rX, rY, rZ).applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
-                    f.body.position.set(_v.x, _v.y, _v.z);
-                    f.mesh.position.copy(f.body.position);
-                });
-            });
+    for (let i = 0; i < 21; i++) {
+        const m = new THREE.Mesh(geo, mat);
+        scene.add(m);
+        handMeshes.push(m);
+    }
 
-            const video = document.getElementById('input_video');
-            // ここで 'environment' (外カメラ) を明示
-            const cameraUtils = new Camera(video, {
-                onFrame: async () => { await hands.send({ image: video }); },
-                facingMode: "environment", 
-                width: { ideal: 1280 },
-                height: { ideal: 720 }
-            });
-            cameraUtils.start();
-            handsStarted = true;
-        }
+    animate();
+}
 
-        const startBtn = document.getElementById('start-btn');
-        const statusText = document.getElementById('status-text');
+function animate() {
+    requestAnimationFrame(animate);
+    renderer.render(scene, camera);
+}
 
-        startBtn.addEventListener('click', async () => {
-            clickCount++;
-            if (clickCount === 1) {
-                if ("vibrate" in navigator) navigator.vibrate(200);
-                startBtn.innerText = "GO TO VR!";
-                startBtn.style.background = "#34A853";
-                statusText.innerText = "Back camera active. Tap again to enter VR.";
-                setupScene();
-                startHandTracking();
-            } else if (clickCount === 2) {
-                if ("vibrate" in navigator) navigator.vibrate([50, 50, 50]);
-                if (navigator.xr) {
-                    navigator.xr.requestSession('immersive-vr', {
-                        optionalFeatures: ['local-floor']
-                    }).then((session) => {
-                        renderer.xr.setSession(session);
-                        document.getElementById('start-overlay').style.display = 'none';
-                        document.getElementById('info-ui').style.display = 'block';
-                    });
-                }
-            }
+// =====================
+// MediaPipe
+// =====================
+function startTracking() {
+    const video = document.getElementById("video");
+
+    const hands = new Hands({
+        locateFile: file =>
+            `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+    });
+
+    hands.setOptions({
+        maxNumHands: 1,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.7,
+        minTrackingConfidence: 0.7
+    });
+
+    hands.onResults(results => {
+        if (!results.multiHandLandmarks) return;
+
+        const landmarks = results.multiHandLandmarks[0];
+
+        landmarks.forEach((p, i) => {
+            const mesh = handMeshes[i];
+
+            // 正しい座標変換（重要）
+            mesh.position.x = (p.x - 0.5) * 2;
+            mesh.position.y = -(p.y - 0.5) * 2;
+            mesh.position.z = -p.z * 0.5;
         });
-    </script>
+    });
+
+    const cam = new Camera(video, {
+        onFrame: async () => {
+            await hands.send({ image: video });
+        },
+        width: 1280,
+        height: 720
+    });
+
+    cam.start();
+}
+
+// =====================
+// UI
+// =====================
+document.getElementById("start").onclick = async () => {
+    document.getElementById("overlay").style.display = "none";
+
+    try {
+        await startTracking();
+    } catch (e) {
+        alert("カメラ起動失敗: " + e);
+    }
+};
+
+// リサイズ対応
+window.addEventListener("resize", () => {
+    camera.aspect = innerWidth / innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+
 </body>
 </html>
