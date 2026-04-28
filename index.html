@@ -1,211 +1,176 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>WebXR Spatial Studio - Enhanced Physics</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-    <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
-        video { display: none; }
-        #start-overlay {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            display: flex; align-items: center; justify-content: center;
-            background: rgba(0,0,0,0.8); z-index: 2000;
-        }
-        .btn {
-            background: #fff; color: #000; border: none; padding: 15px 40px;
-            border-radius: 30px; font-size: 18px; font-weight: bold; cursor: pointer;
-        }
-    </style>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>WebXR Spatial Studio - Grab Focus</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
+        video { display: none; }
+        #start-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            display: flex; align-items: center; justify-content: center;
+            background: white; z-index: 2000;
+        }
+        .btn {
+            background: #4285F4; color: white; border: none; padding: 15px 30px;
+            border-radius: 8px; font-size: 18px; cursor: pointer;
+        }
+    </style>
 </head>
 <body>
-    <div id="start-overlay">
-        <button class="btn" id="start-btn">Start Life-Size VR</button>
-    </div>
-    <video id="input_video" playsinline></video>
+    <div id="start-overlay">
+        <button class="btn" id="start-btn">Start Life-Size Mode</button>
+    </div>
+    <video id="input_video" playsinline></video>
 
-    <script type="module">
-        import { VRButton } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/webxr/VRButton.js';
+    <script type="module">
+        import { VRButton } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/webxr/VRButton.js';
 
-        const SCALE_CONFIG = {
-            handSpread: 1.2,
-            handVertical: 1.2,
-            handDepth: 1.0,
-            zOffset: -0.25, 
-            fingerRadius: 0.012
-        };
+        // --- Configuration for Real Scale ---
+        const SCALE_CONFIG = {
+            handSpread: 1.15,
+            handVertical: 1.15,
+            handDepth: 1.3,
+            zOffset: -0.1, 
+            fingerRadius: 0.012
+        };
 
-        let scene, camera, renderer, world, cubeMesh, cubeBody;
-        let calibStep = 0; // 0: Idle, 1: VR Started/Calibrating, 2: Ready
-        let stayTimer = 0;
-        let maxReachZ = 0.15;
-        const fingers = [];
-        const _v = new THREE.Vector3();
-        const dt = 1/60;
+        let scene, camera, renderer, world, cubeMesh, cubeBody;
+        const fingers = [];
+        const _v = new THREE.Vector3();
+        const dt = 1/60;
 
-        async function init() {
-            document.getElementById('start-overlay').remove();
+        async function init() {
+            document.getElementById('start-overlay').remove();
 
-            scene = new THREE.Scene();
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.01, 100);
-            
-            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.xr.enabled = true;
-            document.body.appendChild(renderer.domElement);
-            document.body.appendChild(VRButton.createButton(renderer));
+            // Scene Setup
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.xr.enabled = true;
+            document.body.appendChild(renderer.domElement);
+            document.body.appendChild(VRButton.createButton(renderer));
 
-            // VR Session Listener
-            renderer.xr.addEventListener('sessionstart', () => {
-                calibStep = 1;
-            });
+            // Physics World
+            world = new CANNON.World();
+            world.gravity.set(0, -9.8, 0);
+            
+            // Physics Materials & Friction
+            const handMat = new CANNON.Material("handMat");
+            const objectMat = new CANNON.Material("objectMat");
+            const contactMat = new CANNON.ContactMaterial(handMat, objectMat, {
+                friction: 1.0,      // Max friction for better gripping
+                restitution: 0.0,   // No bounciness
+                contactEquationStiffness: 1e7,
+                contactEquationRelaxation: 3
+            });
+            world.addContactMaterial(contactMat);
 
-            // Physics World Setup
-            world = new CANNON.World();
-            world.gravity.set(0, -9.8, 0);
-            world.solver.iterations = 10;
-            
-            const handMat = new CANNON.Material("handMat");
-            const objectMat = new CANNON.Material("objectMat");
-            const contactMat = new CANNON.ContactMaterial(handMat, objectMat, {
-                friction: 0.8,
-                restitution: 0.1,
-                contactEquationStiffness: 1e6,
-                contactEquationRelaxation: 3
-            });
-            world.addContactMaterial(contactMat);
+            // --- Layout Settings ---
+            const DESK_Z = -0.25; // Close to the user
+            const DESK_Y = 1.1;   // Waist-to-chest height
 
-            // Floor/Desk
-            const deskGeo = new THREE.BoxGeometry(1.5, 0.05, 1.0);
-            const deskMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
-            const deskMesh = new THREE.Mesh(deskGeo, deskMat);
-            deskMesh.position.set(0, 0.8, -0.4);
-            scene.add(deskMesh);
+            // Desk (Static Platform)
+            const deskMesh = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.05, 0.5), new THREE.MeshStandardMaterial({ color: 0xeeeeee }));
+            deskMesh.position.set(0, DESK_Y, DESK_Z);
+            scene.add(deskMesh);
 
-            const deskBody = new CANNON.Body({ mass: 0, material: objectMat });
-            deskBody.addShape(new CANNON.Box(new CANNON.Vec3(0.75, 0.025, 0.5)));
-            deskBody.position.copy(deskMesh.position);
-            world.addBody(deskBody);
+            const deskBody = new CANNON.Body({ mass: 0, material: objectMat });
+            deskBody.addShape(new CANNON.Box(new CANNON.Vec3(0.5, 0.025, 0.25)));
+            deskBody.position.copy(deskMesh.position);
+            world.addBody(deskBody);
 
-            // Grabbable Cube
-            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.06), new THREE.MeshStandardMaterial({ color: 0x4285F4 }));
-            scene.add(cubeMesh);
-            cubeBody = new CANNON.Body({ 
-                mass: 0.2, 
-                material: objectMat,
-                linearDamping: 0.2,
-                angularDamping: 0.2
-            });
-            cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.03, 0.03, 0.03)));
-            cubeBody.position.set(0, 1.0, -0.4);
-            world.addBody(cubeBody);
+            // Cube (Grabbable Object)
+            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.08), new THREE.MeshStandardMaterial({ color: 0x4285F4 }));
+            scene.add(cubeMesh);
+            cubeBody = new CANNON.Body({ 
+                mass: 0.1, 
+                material: objectMat,
+                linearDamping: 0.5,
+                angularDamping: 0.5 
+            });
+            cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.04, 0.04, 0.04)));
+            cubeBody.position.set(0, DESK_Y + 0.15, DESK_Z);
+            world.addBody(cubeBody);
 
-            // Physics Fingers
-            const fingerGeo = new THREE.SphereGeometry(SCALE_CONFIG.fingerRadius, 12, 12);
-            for (let i = 0; i < 21; i++) {
-                const mesh = new THREE.Mesh(fingerGeo, new THREE.MeshBasicMaterial({ 
-                    color: 0x00aaff, transparent: true, opacity: 0.5 
-                }));
-                scene.add(mesh);
-                
-                const body = new CANNON.Body({ 
-                    mass: 0, 
-                    material: handMat,
-                    type: CANNON.Body.KINEMATIC 
-                });
-                body.addShape(new CANNON.Sphere(SCALE_CONFIG.fingerRadius));
-                world.addBody(body);
-                fingers.push({ mesh, body });
-            }
+            // Fingers (Physics Proxies)
+            const fingerGeo = new THREE.SphereGeometry(SCALE_CONFIG.fingerRadius, 16, 16);
+            for (let i = 0; i < 21; i++) {
+                const mesh = new THREE.Mesh(fingerGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.7 }));
+                scene.add(mesh);
+                const body = new CANNON.Body({ 
+                    mass: 0, 
+                    material: handMat,
+                    collisionFilterGroup: 2, 
+                    collisionFilterMask: 1 
+                });
+                body.addShape(new CANNON.Sphere(SCALE_CONFIG.fingerRadius));
+                body.type = CANNON.Body.KINEMATIC; // Driven by code, but affects physics objects
+                world.addBody(body);
+                fingers.push({ mesh, body });
+            }
 
-            scene.add(new THREE.AmbientLight(0xffffff, 0.8));
-            const sun = new THREE.DirectionalLight(0xffffff, 0.5);
-            sun.position.set(1, 2, 1);
-            scene.add(sun);
+            scene.add(new THREE.AmbientLight(0xffffff, 1.0));
 
-            // Hand Tracking
-            const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
-            hands.setOptions({ 
-                maxNumHands: 1, 
-                modelComplexity: 1, 
-                minDetectionConfidence: 0.8, 
-                minTrackingConfidence: 0.8 
-            });
+            // Hand Tracking Setup
+            const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+            hands.setOptions({ 
+                maxNumHands: 1, 
+                modelComplexity: 1, 
+                minDetectionConfidence: 0.8, 
+                minTrackingConfidence: 0.8 
+            });
 
-            hands.onResults((results) => {
-                if (!results.multiHandLandmarks?.length) return;
-                const landmarks = results.multiHandLandmarks[0];
-                const xrCamera = renderer.xr.isPresenting ? renderer.xr.getCamera(camera) : camera;
+            hands.onResults((results) => {
+                if (!results.multiHandLandmarks?.length) return;
+                const xrCamera = renderer.xr.getCamera(camera);
+                const landmarks = results.multiHandLandmarks[0];
 
-                // Simple Auto-Calibration (Hold still to set maxReach)
-                if (calibStep === 1) {
-                    stayTimer++;
-                    if (stayTimer > 100) {
-                        maxReachZ = Math.abs(landmarks[0].z);
-                        calibStep = 2;
-                        if (navigator.vibrate) navigator.vibrate(50);
-                    }
-                }
+                landmarks.forEach((point, i) => {
+                    const f = fingers[i];
+                    // Mapping landmarks to life-size coordinates
+                    _v.set(
+                        (point.x - 0.5) * SCALE_CONFIG.handSpread, 
+                        -(point.y - 0.5) * SCALE_CONFIG.handVertical, 
+                        -point.z * SCALE_CONFIG.handDepth + SCALE_CONFIG.zOffset
+                    );
+                    _v.applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
+                    
+                    const nextPos = new CANNON.Vec3(_v.x, _v.y, _v.z);
+                    // Update velocity to enable physical interaction (pushing/grabbing)
+                    f.body.velocity.set(
+                        (nextPos.x - f.body.position.x) / dt,
+                        (nextPos.y - f.body.position.y) / dt,
+                        (nextPos.z - f.body.position.z) / dt
+                    );
+                    f.body.position.copy(nextPos);
+                    f.mesh.position.copy(f.body.position);
+                });
+            });
 
-                const palmZ = (landmarks[0].z + landmarks[9].z) / 2;
+            const video = document.getElementById('input_video');
+            const cameraUtils = new Camera(video, {
+                onFrame: async () => { await hands.send({ image: video }); },
+                facingMode: "environment", width: 1280, height: 720
+            });
+            cameraUtils.start();
 
-                landmarks.forEach((point, i) => {
-                    const f = fingers[i];
-                    
-                    // Apply Z-clamping to prevent finger over-extension
-                    let constrainedZ = point.z;
-                    if (i > 0) constrainedZ = Math.max(point.z, palmZ - 0.05);
+            // Animation Loop
+            renderer.setAnimationLoop(() => {
+                world.step(dt);
+                cubeMesh.position.copy(cubeBody.position);
+                cubeMesh.quaternion.copy(cubeBody.quaternion);
+                renderer.render(scene, camera);
+            });
+        }
 
-                    // Map to 3D Space
-                    const zMap = (Math.abs(constrainedZ) / maxReachZ) * SCALE_CONFIG.handDepth;
-                    
-                    _v.set(
-                        (point.x - 0.5) * SCALE_CONFIG.handSpread, 
-                        -(point.y - 0.5) * SCALE_CONFIG.handVertical, 
-                        -zMap + SCALE_CONFIG.zOffset
-                    );
-
-                    // Transform relative to VR Camera
-                    _v.applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
-                    
-                    // Smooth Velocity Update
-                    const nextPos = new CANNON.Vec3(_v.x, _v.y, _v.z);
-                    f.body.velocity.set(
-                        (nextPos.x - f.body.position.x) / dt,
-                        (nextPos.y - f.body.position.y) / dt,
-                        (nextPos.z - f.body.position.z) / dt
-                    );
-                    f.body.position.copy(nextPos);
-                    f.mesh.position.copy(f.body.position);
-
-                    // Visual Feedback
-                    if (calibStep === 2) {
-                        f.mesh.material.color.setHex(0xffffff);
-                        f.mesh.material.opacity = 0.8;
-                    }
-                });
-            });
-
-            const video = document.getElementById('input_video');
-            const cameraUtils = new Camera(video, {
-                onFrame: async () => { await hands.send({ image: video }); },
-                facingMode: "environment", width: 1280, height: 720
-            });
-            cameraUtils.start();
-
-            renderer.setAnimationLoop(() => {
-                world.step(dt);
-                cubeMesh.position.copy(cubeBody.position);
-                cubeMesh.quaternion.copy(cubeBody.quaternion);
-                renderer.render(scene, camera);
-            });
-        }
-
-        document.getElementById('start-btn').addEventListener('click', init);
-    </script>
+        document.getElementById('start-btn').addEventListener('click', init);
+    </script>
 </body>
 </html>
