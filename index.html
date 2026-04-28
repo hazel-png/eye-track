@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>WebXR Spatial Studio - Professional Edition</title>
+    <title>WebXR Spatial Studio - Enhanced Physics</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
@@ -14,18 +14,17 @@
         #start-overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             display: flex; align-items: center; justify-content: center;
-            background: rgba(255,255,255,0.9); z-index: 2000;
+            background: rgba(0,0,0,0.8); z-index: 2000;
         }
         .btn {
-            background: #4285F4; color: white; border: none; padding: 20px 40px;
-            border-radius: 50px; font-size: 20px; font-weight: bold; cursor: pointer;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            background: #fff; color: #000; border: none; padding: 15px 40px;
+            border-radius: 30px; font-size: 18px; font-weight: bold; cursor: pointer;
         }
     </style>
 </head>
 <body>
     <div id="start-overlay">
-        <button class="btn" id="start-btn">Enter Spatial VR</button>
+        <button class="btn" id="start-btn">Start Life-Size VR</button>
     </div>
     <video id="input_video" playsinline></video>
 
@@ -33,131 +32,122 @@
         import { VRButton } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/webxr/VRButton.js';
 
         const SCALE_CONFIG = {
-            handSpread: 1.4,    // Width scaling
-            handVertical: 1.4,  // Height scaling
-            handDepth: 1.5,     // Depth sensitivity
-            zOffset: -0.2,      // Forward/backward offset
-            fingerRadius: 0.008 // Size of each joint
+            handSpread: 1.2,
+            handVertical: 1.2,
+            handDepth: 1.0,
+            zOffset: -0.25, 
+            fingerRadius: 0.012
         };
 
-        // Finger connection map (for drawing bones)
-        const HAND_CONNECTIONS = [
-            [0,1],[1,2],[2,3],[3,4],        // Thumb
-            [0,5],[5,6],[6,7],[7,8],        // Index
-            [5,9],[9,10],[10,11],[11,12],   // Middle
-            [9,13],[13,14],[14,15],[15,16], // Ring
-            [13,17],[17,18],[18,19],[19,20],[0,17] // Pinky & Palm
-        ];
-
-        let scene, camera, renderer, world, cubeMesh, cubeBody, uiMesh, uiContext;
-        let calibStep = 0, stayTimer = 0, maxReachZ = 0.15;
+        let scene, camera, renderer, world, cubeMesh, cubeBody;
+        let calibStep = 0; // 0: Idle, 1: VR Started/Calibrating, 2: Ready
+        let stayTimer = 0;
+        let maxReachZ = 0.15;
         const fingers = [];
-        const bones = [];
         const _v = new THREE.Vector3();
         const dt = 1/60;
-
-        function updateUIMessage(text) {
-            uiContext.clearRect(0, 0, 512, 128);
-            uiContext.fillStyle = 'rgba(0, 0, 0, 0.8)';
-            uiContext.fillRect(0, 0, 512, 128);
-            uiContext.fillStyle = 'white';
-            uiContext.font = 'bold 32px Arial';
-            uiContext.textAlign = 'center';
-            uiContext.fillText(text, 256, 80);
-            uiMesh.material.map.needsUpdate = true;
-        }
 
         async function init() {
             document.getElementById('start-overlay').remove();
 
             scene = new THREE.Scene();
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.01, 100);
+            
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
             document.body.appendChild(VRButton.createButton(renderer));
 
-            // VR UI Setup
-            const canvas = document.createElement('canvas');
-            canvas.width = 512; canvas.height = 128;
-            uiContext = canvas.getContext('2d');
-            uiMesh = new THREE.Mesh(
-                new THREE.PlaneGeometry(0.4, 0.1),
-                new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(canvas), transparent: true })
-            );
-            uiMesh.position.set(0, 1.6, -0.6);
-            scene.add(uiMesh);
-
+            // VR Session Listener
             renderer.xr.addEventListener('sessionstart', () => {
-                calibStep = 1; stayTimer = 0;
-                updateUIMessage("Hold Palm Still for 2s");
+                calibStep = 1;
             });
 
-            // Physics
+            // Physics World Setup
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
-            const handMat = new CANNON.Material();
-            const objectMat = new CANNON.Material();
-            world.addContactMaterial(new CANNON.ContactMaterial(handMat, objectMat, { friction: 1.0, restitution: 0.1 }));
+            world.solver.iterations = 10;
+            
+            const handMat = new CANNON.Material("handMat");
+            const objectMat = new CANNON.Material("objectMat");
+            const contactMat = new CANNON.ContactMaterial(handMat, objectMat, {
+                friction: 0.8,
+                restitution: 0.1,
+                contactEquationStiffness: 1e6,
+                contactEquationRelaxation: 3
+            });
+            world.addContactMaterial(contactMat);
 
-            // Objects
-            const deskGeo = new THREE.BoxGeometry(0.8, 0.05, 0.4);
+            // Floor/Desk
+            const deskGeo = new THREE.BoxGeometry(1.5, 0.05, 1.0);
             const deskMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
             const deskMesh = new THREE.Mesh(deskGeo, deskMat);
-            deskMesh.position.set(0, 1.0, -0.3);
+            deskMesh.position.set(0, 0.8, -0.4);
             scene.add(deskMesh);
 
-            const deskBody = new CANNON.Body({ mass: 0 });
-            deskBody.addShape(new CANNON.Box(new CANNON.Vec3(0.4, 0.025, 0.2)));
+            const deskBody = new CANNON.Body({ mass: 0, material: objectMat });
+            deskBody.addShape(new CANNON.Box(new CANNON.Vec3(0.75, 0.025, 0.5)));
             deskBody.position.copy(deskMesh.position);
             world.addBody(deskBody);
 
-            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.08), new THREE.MeshStandardMaterial({ color: 0x4285F4 }));
+            // Grabbable Cube
+            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.06), new THREE.MeshStandardMaterial({ color: 0x4285F4 }));
             scene.add(cubeMesh);
-            cubeBody = new CANNON.Body({ mass: 0.2, material: objectMat });
-            cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.04, 0.04, 0.04)));
-            cubeBody.position.set(0, 1.2, -0.3);
+            cubeBody = new CANNON.Body({ 
+                mass: 0.2, 
+                material: objectMat,
+                linearDamping: 0.2,
+                angularDamping: 0.2
+            });
+            cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.03, 0.03, 0.03)));
+            cubeBody.position.set(0, 1.0, -0.4);
             world.addBody(cubeBody);
 
-            scene.add(new THREE.AmbientLight(0xffffff, 1.0));
-
-            // Fingers & Bones
+            // Physics Fingers
+            const fingerGeo = new THREE.SphereGeometry(SCALE_CONFIG.fingerRadius, 12, 12);
             for (let i = 0; i < 21; i++) {
-                const mesh = new THREE.Mesh(new THREE.SphereGeometry(SCALE_CONFIG.fingerRadius), new THREE.MeshStandardMaterial({ color: 0xffffff }));
+                const mesh = new THREE.Mesh(fingerGeo, new THREE.MeshBasicMaterial({ 
+                    color: 0x00aaff, transparent: true, opacity: 0.5 
+                }));
                 scene.add(mesh);
-                const body = new CANNON.Body({ mass: 0, type: CANNON.Body.KINEMATIC, material: handMat });
+                
+                const body = new CANNON.Body({ 
+                    mass: 0, 
+                    material: handMat,
+                    type: CANNON.Body.KINEMATIC 
+                });
                 body.addShape(new CANNON.Sphere(SCALE_CONFIG.fingerRadius));
                 world.addBody(body);
                 fingers.push({ mesh, body });
             }
-            
-            HAND_CONNECTIONS.forEach(() => {
-                const bone = new THREE.Line(
-                    new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
-                    new THREE.LineBasicMaterial({ color: 0x4285F4, linewidth: 2 })
-                );
-                scene.add(bone);
-                bones.push(bone);
-            });
 
-            // Tracking
+            scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+            const sun = new THREE.DirectionalLight(0xffffff, 0.5);
+            sun.position.set(1, 2, 1);
+            scene.add(sun);
+
+            // Hand Tracking
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
-            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.8, minTrackingConfidence: 0.8 });
+            hands.setOptions({ 
+                maxNumHands: 1, 
+                modelComplexity: 1, 
+                minDetectionConfidence: 0.8, 
+                minTrackingConfidence: 0.8 
+            });
 
             hands.onResults((results) => {
                 if (!results.multiHandLandmarks?.length) return;
-                const xrCamera = renderer.xr.isPresenting ? renderer.xr.getCamera(camera) : camera;
                 const landmarks = results.multiHandLandmarks[0];
+                const xrCamera = renderer.xr.isPresenting ? renderer.xr.getCamera(camera) : camera;
 
-                // Calibration Logic
+                // Simple Auto-Calibration (Hold still to set maxReach)
                 if (calibStep === 1) {
                     stayTimer++;
                     if (stayTimer > 100) {
                         maxReachZ = Math.abs(landmarks[0].z);
                         calibStep = 2;
-                        updateUIMessage("Calibration Complete!");
-                        setTimeout(() => uiMesh.visible = false, 2000);
+                        if (navigator.vibrate) navigator.vibrate(50);
                     }
                 }
 
@@ -165,38 +155,39 @@
 
                 landmarks.forEach((point, i) => {
                     const f = fingers[i];
-                    // Z-Clamping for better depth
-                    let cZ = Math.max(point.z, palmZ - 0.04);
-                    const zMapped = (Math.abs(cZ) / maxReachZ) * SCALE_CONFIG.handDepth;
+                    
+                    // Apply Z-clamping to prevent finger over-extension
+                    let constrainedZ = point.z;
+                    if (i > 0) constrainedZ = Math.max(point.z, palmZ - 0.05);
 
+                    // Map to 3D Space
+                    const zMap = (Math.abs(constrainedZ) / maxReachZ) * SCALE_CONFIG.handDepth;
+                    
                     _v.set(
                         (point.x - 0.5) * SCALE_CONFIG.handSpread, 
-                        -(point.y - 0.5) * SCALE_CONFIG.handVertical + 1.2, // Offset to chest height
-                        -zMapped + SCALE_CONFIG.zOffset
+                        -(point.y - 0.5) * SCALE_CONFIG.handVertical, 
+                        -zMap + SCALE_CONFIG.zOffset
                     );
+
+                    // Transform relative to VR Camera
                     _v.applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
                     
+                    // Smooth Velocity Update
                     const nextPos = new CANNON.Vec3(_v.x, _v.y, _v.z);
-                    f.body.velocity.set((nextPos.x - f.body.position.x)/dt, (nextPos.y - f.body.position.y)/dt, (nextPos.z - f.body.position.z)/dt);
+                    f.body.velocity.set(
+                        (nextPos.x - f.body.position.x) / dt,
+                        (nextPos.y - f.body.position.y) / dt,
+                        (nextPos.z - f.body.position.z) / dt
+                    );
                     f.body.position.copy(nextPos);
                     f.mesh.position.copy(f.body.position);
-                });
 
-                // Update Bones
-                HAND_CONNECTIONS.forEach((conn, i) => {
-                    const p1 = fingers[conn[0]].mesh.position;
-                    const p2 = fingers[conn[1]].mesh.position;
-                    const pos = bones[i].geometry.attributes.position;
-                    pos.setXYZ(0, p1.x, p1.y, p1.z);
-                    pos.setXYZ(1, p2.x, p2.y, p2.z);
-                    pos.needsUpdate = true;
+                    // Visual Feedback
+                    if (calibStep === 2) {
+                        f.mesh.material.color.setHex(0xffffff);
+                        f.mesh.material.opacity = 0.8;
+                    }
                 });
-
-                if (uiMesh.visible) {
-                    const uiTarget = new THREE.Vector3(0, 0, -0.6).applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
-                    uiMesh.position.copy(uiTarget);
-                    uiMesh.quaternion.copy(xrCamera.quaternion);
-                }
             });
 
             const video = document.getElementById('input_video');
