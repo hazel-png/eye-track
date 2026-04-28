@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>WebXR - Double Click VR</title>
+    <title>WebXR - Back Camera Focus</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
@@ -14,14 +14,12 @@
         #start-overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             display: flex; flex-direction: column; align-items: center; justify-content: center;
-            background: white; z-index: 2000; transition: background 0.3s;
+            background: white; z-index: 2000;
         }
         .btn {
             background: #4285F4; color: white; border: none; padding: 25px 50px;
-            border-radius: 50px; font-size: 22px; cursor: pointer; 
-            box-shadow: 0 4px 15px rgba(0,0,0,0.2); transition: transform 0.1s;
+            border-radius: 50px; font-size: 22px; cursor: pointer; box-shadow: 0 4px 15px rgba(0,0,0,0.2);
         }
-        .btn:active { transform: scale(0.95); }
         #status-text { margin-top: 20px; color: #555; font-size: 16px; }
         #info-ui {
             position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
@@ -33,7 +31,7 @@
 <body>
     <div id="start-overlay">
         <button class="btn" id="start-btn">READY?</button>
-        <div id="status-text">Tap to initialize camera</div>
+        <div id="status-text">Tap to start (Using Back Camera)</div>
     </div>
     <div id="info-ui">STRETCH YOUR ARM TO CALIBRATE</div>
     <video id="input_video" playsinline></video>
@@ -50,7 +48,6 @@
         const _v = new THREE.Vector3();
         const dt = 1/60;
 
-        // --- 物理と描画の基本設定 ---
         function setupScene() {
             scene = new THREE.Scene();
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
@@ -62,7 +59,6 @@
             world = new CANNON.World();
             world.gravity.set(0, -9.8, 0);
             
-            // 指の生成
             for (let i = 0; i < 21; i++) {
                 const mesh = new THREE.Mesh(new THREE.SphereGeometry(SCALE_CONFIG.fingerRadius, 8), new THREE.MeshBasicMaterial({ color: 0x00ffcc }));
                 scene.add(mesh);
@@ -73,7 +69,17 @@
             }
             scene.add(new THREE.AmbientLight(0xffffff, 1.0));
 
-            // アニメーションループ
+            // Desk and Cube (for interaction)
+            const deskMesh = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.05, 0.6), new THREE.MeshStandardMaterial({ color: 0x444444 }));
+            deskMesh.position.set(0, 1.0, -0.4);
+            scene.add(deskMesh);
+            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.08), new THREE.MeshStandardMaterial({ color: 0x4285F4 }));
+            scene.add(cubeMesh);
+            cubeBody = new CANNON.Body({ mass: 0.1 });
+            cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.04, 0.04, 0.04)));
+            cubeBody.position.set(0, 1.2, -0.4);
+            world.addBody(cubeBody);
+
             renderer.setAnimationLoop(() => {
                 world.step(dt);
                 if(cubeMesh) {
@@ -84,7 +90,6 @@
             });
         }
 
-        // --- ハンドトラッキングの起動 ---
         async function startHandTracking() {
             if (handsStarted) return;
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
@@ -95,7 +100,6 @@
                 const xrCamera = renderer.xr.getCamera(camera);
                 const landmarks = results.multiHandLandmarks[0];
 
-                // キャリブレーション
                 if (!SCALE_CONFIG.isCalibrated && landmarks[0].z < -0.12) {
                     SCALE_CONFIG.handDepth = Math.abs(1.0 / landmarks[0].z) * 0.18;
                     SCALE_CONFIG.isCalibrated = true;
@@ -117,36 +121,31 @@
             });
 
             const video = document.getElementById('input_video');
+            // ここで 'environment' (外カメラ) を明示
             const cameraUtils = new Camera(video, {
                 onFrame: async () => { await hands.send({ image: video }); },
-                width: 1280, height: 720
+                facingMode: "environment", 
+                width: { ideal: 1280 },
+                height: { ideal: 720 }
             });
             cameraUtils.start();
             handsStarted = true;
         }
 
-        // --- メインのボタンロジック ---
         const startBtn = document.getElementById('start-btn');
         const statusText = document.getElementById('status-text');
 
         startBtn.addEventListener('click', async () => {
             clickCount++;
-
             if (clickCount === 1) {
-                // 1回目のクリック：震える ＋ カメラ準備
-                if ("vibrate" in navigator) navigator.vibrate(200); // 200ms震える
-                
+                if ("vibrate" in navigator) navigator.vibrate(200);
                 startBtn.innerText = "GO TO VR!";
-                startBtn.style.background = "#34A853"; // 緑色に変える
-                statusText.innerText = "Camera initialized. Tap again to enter VR.";
-                
+                startBtn.style.background = "#34A853";
+                statusText.innerText = "Back camera active. Tap again to enter VR.";
                 setupScene();
                 startHandTracking();
-
             } else if (clickCount === 2) {
-                // 2回目のクリック：VRへ突入
-                if ("vibrate" in navigator) navigator.vibrate([50, 50, 50]); // 短く3回震える
-                
+                if ("vibrate" in navigator) navigator.vibrate([50, 50, 50]);
                 if (navigator.xr) {
                     navigator.xr.requestSession('immersive-vr', {
                         optionalFeatures: ['local-floor']
