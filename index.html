@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Spatial Hands - Fixed Edition</title>
+    <title>Spatial Hands - Advanced Calib</title>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/cannon@0.6.2/build/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
@@ -15,10 +15,10 @@
             display: flex; align-items: center; justify-content: center;
             background: rgba(0,0,0,0.8); z-index: 2000; transition: opacity 0.5s;
         }
-        .ios-card {
+        #instruction {
             background: rgba(255, 255, 255, 0.1); backdrop-filter: blur(20px);
-            padding: 40px; border-radius: 30px; text-align: center; color: white;
-            border: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 30px; border-radius: 30px; text-align: center; color: white;
+            border: 1px solid rgba(255, 255, 255, 0.2); width: 80%; max-width: 400px;
         }
         .start-btn {
             background: #fff; color: #000; border: none; padding: 15px 40px;
@@ -29,10 +29,10 @@
 </head>
 <body>
     <div id="overlay">
-        <div class="ios-card">
-            <h1>Spatial Anywhere</h1>
-            <p>カメラの前で手をかざしてください</p>
-            <button class="start-btn" id="start-btn">開始する</button>
+        <div id="instruction">
+            <h1 id="status-title">Spatial Anywhere</h1>
+            <p id="status-text">カメラに手をかざしてください</p>
+            <button class="start-btn" id="start-btn">開始</button>
         </div>
     </div>
     <video id="input_video" playsinline></video>
@@ -40,45 +40,47 @@
     <script type="module">
         import { VRButton } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/webxr/VRButton.js';
 
-        let scene, camera, renderer, world, cubeMesh, cubeBody, ringMesh;
-        let isHandActive = false, calibComplete = false;
-        let maxReachZ = 0.15;
+        let scene, camera, renderer, world, cubeMesh, cubeBody;
+        let fingers = [];
+        
+        // キャリブレーション変数
+        let calibStep = 0; // 0: 待機, 1: パー(位置固定), 2: グー, 3: 完了
         let stayTimer = 0;
-        const fingers = [];
+        let maxReachZ = 0.15;
+        let openHandSize = 0;
+        let closedHandSize = 0;
+
+        const statusTitle = document.getElementById('status-title');
+        const statusText = document.getElementById('status-text');
+
+        // 手首から中指先までの距離を測る
+        function getHandSize(landmarks) {
+            const wrist = landmarks[0];
+            const middleTip = landmarks[12];
+            return Math.sqrt(Math.pow(middleTip.x - wrist.x, 2) + Math.pow(middleTip.y - wrist.y, 2));
+        }
 
         async function init() {
-            document.getElementById('overlay').style.opacity = '0';
-            setTimeout(() => document.getElementById('overlay').remove(), 500);
-
-            // --- Three.js Setup ---
+            document.getElementById('start-btn').style.display = 'none';
+            
+            // --- Three.js & Physics Setup (前回の改善版を継承) ---
             scene = new THREE.Scene();
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
-            
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
             document.body.appendChild(VRButton.createButton(renderer));
 
-            // --- Physics Setup ---
             world = new CANNON.World();
-            world.gravity.set(0, -2.0, 0); // 物理挙動を見やすくするため少し低重力
+            world.gravity.set(0, -1.0, 0);
 
-            // キャリブレーション用リング
-            ringMesh = new THREE.Mesh(
-                new THREE.RingGeometry(0.04, 0.05, 32),
-                new THREE.MeshBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0, side: THREE.DoubleSide })
-            );
-            scene.add(ringMesh);
-
-            // 物理キューブ
-            const boxSize = 0.1;
-            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(boxSize, boxSize, boxSize), new THREE.MeshStandardMaterial({ color: 0xffffff }));
+            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.1), new THREE.MeshStandardMaterial({ color: 0xffffff }));
             cubeMesh.visible = false;
             scene.add(cubeMesh);
 
             cubeBody = new CANNON.Body({ mass: 1 });
-            cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(boxSize/2, boxSize/2, boxSize/2)));
+            cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.05, 0.05, 0.05)));
             cubeBody.position.set(0, 1.2, -0.3);
             world.addBody(cubeBody);
 
@@ -87,80 +89,81 @@
             light.position.set(1, 2, 1);
             scene.add(light);
 
-            // --- Hand Joints (21 Spheres) ---
             for (let i = 0; i < 21; i++) {
-                const mesh = new THREE.Mesh(
-                    new THREE.SphereGeometry(0.012), 
-                    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0 })
-                );
+                const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.012), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0 }));
                 scene.add(mesh);
-
                 const body = new CANNON.Body({ mass: 0, type: CANNON.Body.KINEMATIC });
                 body.addShape(new CANNON.Sphere(0.012));
                 world.addBody(body);
-                
                 fingers.push({ mesh, body });
             }
 
-            // --- MediaPipe Hands ---
+            // --- MediaPipe Logic ---
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
-            hands.setOptions({ 
-                maxNumHands: 1, 
-                modelComplexity: 1, 
-                minDetectionConfidence: 0.7,
-                minTrackingConfidence: 0.7 
-            });
+            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
 
             hands.onResults((results) => {
-                if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
-                    isHandActive = false;
-                    stayTimer = 0;
-                    ringMesh.material.opacity = 0;
-                    fingers.forEach(f => f.mesh.material.opacity = 0);
-                    return;
-                }
-
-                isHandActive = true;
+                if (!results.multiHandLandmarks?.length) return;
                 const landmarks = results.multiHandLandmarks[0];
                 const xrCamera = renderer.xr.isPresenting ? renderer.xr.getCamera(camera) : camera;
 
-                // 21個の関節それぞれを更新
+                // --- 1. キャリブレーション・ステートマシン ---
+                if (calibStep === 0) {
+                    calibStep = 1;
+                    statusTitle.innerText = "Step 1: パー";
+                    statusText.innerText = "手を広げて2秒間止まってください";
+                } else if (calibStep === 1) {
+                    stayTimer++;
+                    if (stayTimer > 60) {
+                        maxReachZ = Math.abs(landmarks[0].z);
+                        openHandSize = getHandSize(landmarks);
+                        calibStep = 2;
+                        stayTimer = 0;
+                        if (navigator.vibrate) navigator.vibrate(50);
+                        statusTitle.innerText = "Step 2: グー";
+                        statusText.innerText = "そのまま手を握ってください";
+                    }
+                } else if (calibStep === 2) {
+                    const currentSize = getHandSize(landmarks);
+                    // パーの時より明らかに小さくなったら記録
+                    if (currentSize < openHandSize * 0.7) {
+                        closedHandSize = currentSize;
+                        calibStep = 3;
+                        if (navigator.vibrate) navigator.vibrate([50, 30, 50]);
+                        document.getElementById('overlay').style.opacity = '0';
+                        setTimeout(() => document.getElementById('overlay').remove(), 500);
+                        cubeMesh.visible = true;
+                    }
+                }
+
+                // --- 2. 座標計算 & 角度制限(Zクランプ) ---
+                const wristZ = landmarks[0].z;
+                const palmZ = (landmarks[0].z + landmarks[9].z) / 2;
+
                 landmarks.forEach((point, i) => {
                     fingers[i].mesh.material.opacity = 0.8;
                     
-                    // 座標変換: カメラ映像(0~1)を3D空間(-1.2~1.2程度)へ
-                    // point.z をスケールに利用
-                    const zScale = calibComplete ? (Math.abs(point.z) / maxReachZ) * 0.5 : Math.abs(point.z) * 2.0;
-                    
-                    const posX = (point.x - 0.5) * -2.0; // 鏡合わせにするため反転
-                    const posY = (point.y - 0.5) * -1.5 + 1.0; // 少し上にオフセット
+                    // Z軸の突き抜け防止クランプ
+                    let constrainedZ = point.z;
+                    if (i > 0) {
+                        // 手のひら基準面より一定以上奥に行かないように制限
+                        constrainedZ = Math.max(point.z, palmZ - 0.04);
+                    }
+
+                    const zScale = (Math.abs(constrainedZ) / maxReachZ) * 0.5;
+                    const posX = (point.x - 0.5) * -2.0;
+                    const posY = (point.y - 0.5) * -1.5 + 1.0;
                     const posZ = -zScale - 0.2;
 
-                    // XRのカメラ姿勢に合わせる
                     const targetPos = new THREE.Vector3(posX, posY, posZ);
                     targetPos.applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
 
-                    // CANNON.js の position を直接更新
-                    fingers[i].body.position.set(targetPos.x, targetPos.y, targetPos.z);
+                    // 滑らかな追従
+                    fingers[i].body.position.x += (targetPos.x - fingers[i].body.position.x) * 0.4;
+                    fingers[i].body.position.y += (targetPos.y - fingers[i].body.position.y) * 0.4;
+                    fingers[i].body.position.z += (targetPos.z - fingers[i].body.position.z) * 0.4;
                     fingers[i].mesh.position.copy(fingers[i].body.position);
                 });
-
-                // キャリブレーション
-                if (!calibComplete) {
-                    stayTimer++;
-                    const wristPos = fingers[0].mesh.position;
-                    ringMesh.position.set(wristPos.x, wristPos.y, wristPos.z);
-                    ringMesh.lookAt(xrCamera.position);
-                    ringMesh.material.opacity = Math.min(stayTimer / 60, 0.8);
-
-                    if (stayTimer > 60) {
-                        maxReachZ = Math.abs(landmarks[0].z);
-                        calibComplete = true;
-                        ringMesh.visible = false;
-                        cubeMesh.visible = true;
-                        if (navigator.vibrate) navigator.vibrate([50, 30, 50]);
-                    }
-                }
             });
 
             const video = document.getElementById('input_video');
@@ -170,28 +173,17 @@
             });
             cameraUtils.start();
 
-            // --- Animation Loop ---
             renderer.setAnimationLoop(() => {
                 world.step(1/60);
-                
-                if (calibComplete) {
+                if (calibStep === 3) {
                     cubeMesh.position.copy(cubeBody.position);
                     cubeMesh.quaternion.copy(cubeBody.quaternion);
                 }
-                
                 renderer.render(scene, camera);
             });
         }
 
-        document.getElementById('start-btn').addEventListener('click', () => {
-            init();
-        });
-
-        window.addEventListener('resize', () => {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-        });
+        document.getElementById('start-btn').addEventListener('click', init);
     </script>
 </body>
 </html>
