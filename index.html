@@ -3,66 +3,62 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Hand Tracking AR Fixed</title>
+<title>Pseudo VR Step1</title>
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
 <style>
-body { margin: 0; overflow: hidden; background: black; }
-#overlay {
+body { margin:0; overflow:hidden; background:black; }
+#btn {
     position: fixed;
-    inset: 0;
-    background: white;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    flex-direction: column;
-    z-index: 10;
+    inset:0;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    background:white;
+    z-index:10;
 }
-button {
-    font-size: 24px;
-    padding: 20px 40px;
-}
+button { font-size:24px; padding:20px 40px; }
 </style>
 </head>
 
 <body>
 
-<div id="overlay">
-    <button id="start">START</button>
-</div>
-
+<div id="btn"><button>START</button></div>
 <video id="video" playsinline style="display:none;"></video>
 
 <script>
-let scene, camera, renderer;
+let camera, scene, renderer;
 let videoTexture;
 let handMeshes = [];
 
-init();
+let prevImageData = null;
+let velocityZ = 0;
 
+// ======================
+// 初期化
+// ======================
 function init() {
     scene = new THREE.Scene();
 
-    camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.01, 10);
+    camera = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.01, 10);
     camera.position.z = 1;
 
-    renderer = new THREE.WebGLRenderer({ alpha: true });
+    renderer = new THREE.WebGLRenderer({ alpha:true });
     renderer.setSize(innerWidth, innerHeight);
     document.body.appendChild(renderer.domElement);
 
-    // 背景（カメラ映像）
     const video = document.getElementById("video");
     videoTexture = new THREE.VideoTexture(video);
     scene.background = videoTexture;
 
-    // 手のポイント
+    // 手
     const geo = new THREE.SphereGeometry(0.02, 12, 12);
-    const mat = new THREE.MeshBasicMaterial({ color: 0x00ffcc });
+    const mat = new THREE.MeshBasicMaterial({ color:0x00ffcc });
 
-    for (let i = 0; i < 21; i++) {
+    for (let i=0;i<21;i++){
         const m = new THREE.Mesh(geo, mat);
         scene.add(m);
         handMeshes.push(m);
@@ -71,71 +67,125 @@ function init() {
     animate();
 }
 
-function animate() {
+// ======================
+// 描画ループ
+// ======================
+function animate(){
     requestAnimationFrame(animate);
+
+    // 前後移動適用
+    camera.position.z += velocityZ;
+    velocityZ *= 0.9; // 減衰（重要）
+
     renderer.render(scene, camera);
 }
 
-// =====================
-// MediaPipe
-// =====================
-function startTracking() {
-    const video = document.getElementById("video");
+// ======================
+// ジャイロ
+// ======================
+function setupGyro(){
+    window.addEventListener("deviceorientation", (e)=>{
+        camera.rotation.order = "YXZ";
 
+        camera.rotation.y = e.alpha * Math.PI/180;
+        camera.rotation.x = e.beta * Math.PI/180;
+    });
+}
+
+// ======================
+// カメラ差分（超軽量版）
+// ======================
+function setupMotionEstimation(video){
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+
+    canvas.width = 160; // 軽量化
+    canvas.height = 120;
+
+    setInterval(()=>{
+        ctx.drawImage(video,0,0,canvas.width,canvas.height);
+        const img = ctx.getImageData(0,0,canvas.width,canvas.height);
+
+        if(prevImageData){
+            let diff = 0;
+
+            for(let i=0;i<img.data.length;i+=4){
+                diff += Math.abs(img.data[i] - prevImageData.data[i]);
+            }
+
+            diff /= img.data.length;
+
+            // 前後移動に変換
+            velocityZ += diff * 0.00002;
+
+            // 疑似ハプティック
+            if(diff > 15 && navigator.vibrate){
+                navigator.vibrate(10);
+            }
+        }
+
+        prevImageData = img;
+
+    }, 50);
+}
+
+// ======================
+// MediaPipe
+// ======================
+function setupHands(video){
     const hands = new Hands({
-        locateFile: file =>
-            `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
     });
 
     hands.setOptions({
-        maxNumHands: 1,
-        modelComplexity: 1,
-        minDetectionConfidence: 0.7,
-        minTrackingConfidence: 0.7
+        maxNumHands:1,
+        modelComplexity:1,
+        minDetectionConfidence:0.7,
+        minTrackingConfidence:0.7
     });
 
-    hands.onResults(results => {
-        if (!results.multiHandLandmarks) return;
+    hands.onResults(res=>{
+        if(!res.multiHandLandmarks) return;
 
-        const landmarks = results.multiHandLandmarks[0];
+        const lm = res.multiHandLandmarks[0];
 
-        landmarks.forEach((p, i) => {
-            const mesh = handMeshes[i];
-
-            // 正しい座標変換（重要）
-            mesh.position.x = (p.x - 0.5) * 2;
-            mesh.position.y = -(p.y - 0.5) * 2;
-            mesh.position.z = -p.z * 0.5;
+        lm.forEach((p,i)=>{
+            const m = handMeshes[i];
+            m.position.x = (p.x - 0.5)*2;
+            m.position.y = -(p.y - 0.5)*2;
+            m.position.z = -p.z * 0.5;
         });
     });
 
-    const cam = new Camera(video, {
-        onFrame: async () => {
-            await hands.send({ image: video });
+    const cam = new Camera(video,{
+        onFrame: async ()=>{
+            await hands.send({image:video});
         },
-        width: 1280,
-        height: 720
+        width:1280,
+        height:720
     });
 
     cam.start();
 }
 
-// =====================
-// UI
-// =====================
-document.getElementById("start").onclick = async () => {
-    document.getElementById("overlay").style.display = "none";
+// ======================
+// スタート
+// ======================
+document.querySelector("button").onclick = async ()=>{
+    document.getElementById("btn").style.display="none";
 
-    try {
-        await startTracking();
-    } catch (e) {
-        alert("カメラ起動失敗: " + e);
-    }
+    init();
+    setupGyro();
+
+    const video = document.getElementById("video");
+
+    setupMotionEstimation(video);
+    setupHands(video);
 };
 
-// リサイズ対応
-window.addEventListener("resize", () => {
-    camera.aspect = innerWidth / innerHeight;
+// リサイズ
+addEventListener("resize", ()=>{
+    camera.aspect = innerWidth/innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(innerWidth, innerHeight);
 });
