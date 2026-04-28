@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="en">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>VR Hand Tracking - External Cam</title>
+    <title>VR Hand Tracking - English Guide</title>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/cannon@0.6.2/build/cannon.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
@@ -15,16 +15,22 @@
     <script type="module">
         import { VRButton } from 'https://cdn.skypack.dev/three@0.128.0/examples/jsm/webxr/VRButton.js';
 
-        let scene, camera, renderer, world, cubeMesh, cubeBody;
+        let scene, camera, renderer, world, cubeMesh, cubeBody, uiMesh, uiContext;
         let fingers = [];
-        let calibStep = 0; // 0: 待機, 1: VR開始&パー待ち, 2: グー待ち, 3: 完了
+        let calibStep = 0; // 0: Idle, 1: Calibrating, 2: Finished
         let stayTimer = 0;
-        let maxReachZ = 0.15, openHandSize = 0;
+        let maxReachZ = 0.15;
 
-        function getHandSize(landmarks) {
-            const wrist = landmarks[0];
-            const middleTip = landmarks[12];
-            return Math.sqrt(Math.pow(middleTip.x - wrist.x, 2) + Math.pow(middleTip.y - wrist.y, 2));
+        // 3D空間内にメッセージを表示する関数
+        function updateUIMessage(text) {
+            uiContext.clearRect(0, 0, 512, 128);
+            uiContext.fillStyle = 'rgba(0, 0, 0, 0.5)';
+            uiContext.fillRect(0, 0, 512, 128);
+            uiContext.fillStyle = 'white';
+            uiContext.font = 'bold 32px sans-serif';
+            uiContext.textAlign = 'center';
+            uiContext.fillText(text, 256, 75);
+            uiMesh.material.map.needsUpdate = true;
         }
 
         async function init() {
@@ -35,108 +41,112 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
+            document.body.appendChild(VRButton.createButton(renderer));
 
-            // VRボタンを設置（VRを装着する前にこれをタップ）
-            const vrBtn = VRButton.createButton(renderer);
-            document.body.appendChild(vrBtn);
+            // VR内メッセージパネルの作成
+            const canvas = document.createElement('canvas');
+            canvas.width = 512;
+            canvas.height = 128;
+            uiContext = canvas.getContext('2d');
+            const texture = new THREE.CanvasTexture(canvas);
+            uiMesh = new THREE.Mesh(
+                new THREE.PlaneGeometry(0.5, 0.125),
+                new THREE.MeshBasicMaterial({ map: texture, transparent: true })
+            );
+            uiMesh.position.set(0, 1.6, -0.8); // 目の高さに配置
+            scene.add(uiMesh);
 
-            // 【重要】VRモードに入った瞬間にキャリブレーションを開始
             renderer.xr.addEventListener('sessionstart', () => {
                 calibStep = 1;
-                console.log("VR Session Started - Starting Calibration");
+                stayTimer = 0;
+                updateUIMessage("Hold palm still for 2s...");
             });
 
-            // 物理エンジンの設定
+            // 物理
             world = new CANNON.World();
-            world.gravity.set(0, -1.5, 0);
+            world.gravity.set(0, -1.2, 0);
 
-            // ターゲットオブジェクト（キャリブレーション後に現れる）
-            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.12), new THREE.MeshStandardMaterial({ color: 0x00ff88 }));
+            cubeMesh = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.1), new THREE.MeshStandardMaterial({ color: 0x00ff88 }));
             cubeMesh.visible = false;
             scene.add(cubeMesh);
+
             cubeBody = new CANNON.Body({ mass: 1 });
-            cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.06, 0.06, 0.06)));
+            cubeBody.addShape(new CANNON.Box(new CANNON.Vec3(0.05, 0.05, 0.05)));
             cubeBody.position.set(0, 1.4, -0.4);
             world.addBody(cubeBody);
 
-            scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+            scene.add(new THREE.AmbientLight(0xffffff, 0.8));
 
-            // 手のジョイント（21個）
             for (let i = 0; i < 21; i++) {
-                const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.01), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+                const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.012), new THREE.MeshBasicMaterial({ color: 0xffffff }));
                 scene.add(mesh);
                 const body = new CANNON.Body({ mass: 0, type: CANNON.Body.KINEMATIC });
-                body.addShape(new CANNON.Sphere(0.01));
+                body.addShape(new CANNON.Sphere(0.012));
                 world.addBody(body);
                 fingers.push({ mesh, body });
             }
 
-            // MediaPipe Hands (外カメラ environment 指定)
             const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
-            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
+            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.75 });
 
             hands.onResults((results) => {
                 if (!results.multiHandLandmarks?.length) return;
                 const landmarks = results.multiHandLandmarks[0];
-                
-                // VRモード時は左右それぞれの目の中間地点を取得
                 const xrCamera = renderer.xr.isPresenting ? renderer.xr.getCamera(camera) : camera;
 
-                // --- VR内の状態変化フィードバック ---
+                // キャリブレーション (English Guide)
                 if (calibStep === 1) {
-                    // 青：パーで止まって（位置測定中）
                     fingers.forEach(f => f.mesh.material.color.setHex(0x00aaff));
                     stayTimer++;
-                    if (stayTimer > 100) {
+                    if (stayTimer > 80) {
                         maxReachZ = Math.abs(landmarks[0].z);
-                        openHandSize = getHandSize(landmarks);
                         calibStep = 2;
-                        if (navigator.vibrate) navigator.vibrate(100);
+                        cubeMesh.visible = true;
+                        updateUIMessage("Calibration Complete!");
+                        setTimeout(() => { uiMesh.visible = false; }, 3000); // 3秒後にメッセージを消す
+                        if (navigator.vibrate) navigator.vibrate([50, 50]);
                     }
                 } else if (calibStep === 2) {
-                    // 黄：グーにして（握り測定中）
-                    fingers.forEach(f => f.mesh.material.color.setHex(0xffff00));
-                    if (getHandSize(landmarks) < openHandSize * 0.75) {
-                        calibStep = 3;
-                        cubeMesh.visible = true;
-                        if (navigator.vibrate) navigator.vibrate([50, 30, 50]);
-                    }
-                } else {
-                    // 白：準備完了
                     fingers.forEach(f => f.mesh.material.color.setHex(0xffffff));
                 }
 
-                // 座標計算
                 const palmZ = (landmarks[0].z + landmarks[9].z) / 2;
+
                 landmarks.forEach((point, i) => {
-                    let cZ = Math.max(point.z, palmZ - 0.04); // Zクランプ
+                    let cZ = Math.max(point.z, palmZ - 0.04);
                     const zScale = (Math.abs(cZ) / maxReachZ) * 0.5;
                     
-                    // 外カメラなので X は反転させない
                     const posX = (point.x - 0.5) * 2.2; 
                     const posY = (point.y - 0.5) * -1.8 + 1.2;
                     const posZ = -zScale - 0.3;
 
                     const targetPos = new THREE.Vector3(posX, posY, posZ);
-                    // VRヘッドセットの向きに合わせて手の位置を回転
                     targetPos.applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
 
                     fingers[i].body.position.set(targetPos.x, targetPos.y, targetPos.z);
                     fingers[i].mesh.position.copy(fingers[i].body.position);
                 });
+
+                // メッセージパネルを常にカメラの前に追従させる（見失わないように）
+                if (uiMesh.visible) {
+                    const uiTargetPos = new THREE.Vector3(0, 0.1, -0.8);
+                    uiTargetPos.applyQuaternion(xrCamera.quaternion).add(xrCamera.position);
+                    uiMesh.position.copy(uiTargetPos);
+                    uiMesh.quaternion.copy(xrCamera.quaternion);
+                }
             });
 
             const video = document.getElementById('input_video');
             const cameraUtils = new Camera(video, {
                 onFrame: async () => { await hands.send({ image: video }); },
-                facingMode: "environment", // 外カメラ
+                facingMode: "environment",
                 width: 1280, height: 720
             });
             cameraUtils.start();
 
             renderer.setAnimationLoop(() => {
                 world.step(1/60);
-                if (calibStep === 3) {
+                if (calibStep === 2) {
                     cubeMesh.position.copy(cubeBody.position);
                     cubeMesh.quaternion.copy(cubeBody.quaternion);
                 }
