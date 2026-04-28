@@ -2,317 +2,239 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Full Pseudo VR</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Full Pseudo VR Pro</title>
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
 <style>
-body { margin:0; overflow:hidden; background:black; }
-
+body { margin:0; overflow:hidden; background:black; font-family: sans-serif; }
 #overlay {
-    position:fixed;
-    inset:0;
-    display:flex;
-    justify-content:center;
-    align-items:center;
-    background:linear-gradient(135deg,#fff,#ddd);
-    z-index:10;
+    position:fixed; inset:0; display:flex; justify-content:center; align-items:center;
+    background:rgba(255,255,255,0.95); z-index:100;
 }
-
-#panel {
-    text-align:center;
-}
-
+#panel { text-align:center; padding:20px; }
 button {
-    font-size:22px;
-    padding:15px 40px;
-    border:none;
-    border-radius:30px;
-    background:#4285F4;
-    color:white;
+    font-size:22px; padding:15px 40px; border:none; border-radius:30px;
+    background:#4285F4; color:white; cursor:pointer; box-shadow:0 4px 10px rgba(0,0,0,0.2);
 }
-
 #hud {
-    position:fixed;
-    top:10px;
-    left:10px;
-    right:10px;
-    display:flex;
-    justify-content:space-between;
-    align-items:center;
-    pointer-events:none;
-    z-index:5;
+    position:fixed; top:20px; left:20px; right:20px; display:flex;
+    justify-content:space-between; z-index:50; pointer-events:none;
 }
-
 #status {
-    background:rgba(0,0,0,0.6);
-    color:white;
-    padding:6px 10px;
-    border-radius:20px;
-    font-size:12px;
+    background:rgba(0,0,0,0.7); color:#00ffcc; padding:8px 15px;
+    border-radius:20px; font-size:14px; font-weight:bold;
 }
-
-#crosshair {
-    position:fixed;
-    top:50%;
-    left:50%;
-    width:6px;
-    height:6px;
-    background:white;
-    border-radius:50%;
-    transform:translate(-50%,-50%);
-    opacity:0.8;
-    z-index:5;
+/* ステレオ用クロスヘア（左右に配置） */
+.crosshair {
+    position:fixed; top:50%; width:10px; height:10px;
+    border:2px solid rgba(255,255,255,0.5); border-radius:50%;
+    transform:translate(-50%,-50%); z-index:50;
 }
+#ch-left { left: 25%; }
+#ch-right { left: 75%; }
 </style>
 </head>
-
 <body>
 
 <div id="overlay">
   <div id="panel">
-    <h2>FULL PSEUDO VR</h2>
-    <button id="start">START</button>
-    <p>スマホを動かしてVR体験</p>
+    <h1>FULL PSEUDO VR</h1>
+    <button id="start">START EXPERIENCE</button>
+    <p>1. STARTを押し、2. 画面を横向きに<br>3. 腕を前に伸ばしてキャリブレーション</p>
   </div>
 </div>
 
 <div id="hud">
-  <div id="status">READY</div>
-  <button id="reset">CENTER</button>
+  <div id="status">INITIALIZING...</div>
 </div>
 
-<div id="crosshair"></div>
+<div id="ch-left" class="crosshair"></div>
+<div id="ch-right" class="crosshair"></div>
 
 <video id="video" playsinline style="display:none;"></video>
 
-<script>
-let scene, renderer;
-let camera;
-
+<script type="module">
+let scene, renderer, camera;
 let handMeshes = [];
-let objects = [];
-
+let grabbableObjects = [];
 let velocityZ = 0;
-let prevFrame = null;
-let sensitivity = 0.00002;
+let isCalibrated = false;
+let reachZ = 1.0;
 
-const eyeOffset = 0.03;
+const eyeOffset = 0.035; // 瞳孔間距離
 
-// ========================
-// INIT
-// ========================
-function init(){
+function init() {
     scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x111111);
+    scene.fog = new THREE.Fog(0x111111, 1, 10);
 
-    camera = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.01, 50);
-    camera.position.z = 1;
+    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.01, 100);
+    camera.position.set(0, 1.2, 0);
 
-    renderer = new THREE.WebGLRenderer({ antialias:true });
-    renderer.setSize(innerWidth, innerHeight);
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setSize(window.innerWidth, window.innerHeight);
     document.body.appendChild(renderer.domElement);
 
-    // GRID
-    const grid = new THREE.GridHelper(10,20,0x00ffcc,0x222222);
-    scene.add(grid);
+    // ライティング
+    const light = new THREE.DirectionalLight(0xffffff, 1);
+    light.position.set(1, 2, 1);
+    scene.add(light);
+    scene.add(new THREE.AmbientLight(0x404040));
 
-    // OBJECTS
-    for(let i=0;i<5;i++){
-        const mesh = new THREE.Mesh(
-            new THREE.BoxGeometry(0.1,0.1,0.1),
-            new THREE.MeshBasicMaterial({ color:0x4285F4 })
-        );
-        mesh.position.set((Math.random()-0.5)*2,1+(Math.random()),-1.5);
+    // 地面（グリッド＋床）
+    const grid = new THREE.GridHelper(20, 40, 0x00ffcc, 0x333333);
+    scene.add(grid);
+    
+    // 物体作成
+    const boxGeo = new THREE.BoxGeometry(0.15, 0.15, 0.15);
+    for(let i=0; i<8; i++) {
+        const mat = new THREE.MeshStandardMaterial({ color: Math.random() * 0xffffff });
+        const mesh = new THREE.Mesh(boxGeo, mat);
+        mesh.position.set((Math.random()-0.5)*2, 0.5 + Math.random(), -1 - Math.random()*2);
         scene.add(mesh);
-        objects.push(mesh);
+        grabbableObjects.push(mesh);
     }
 
-    // HANDS
-    const geo = new THREE.SphereGeometry(0.02,12,12);
-    const mat = new THREE.MeshBasicMaterial({ color:0x00ffcc });
-
-    for(let i=0;i<21;i++){
-        const m = new THREE.Mesh(geo,mat);
+    // 手のジョイント
+    const jointGeo = new THREE.SphereGeometry(0.015, 8, 8);
+    const jointMat = new THREE.MeshBasicMaterial({ color: 0x00ffcc });
+    for(let i=0; i<21; i++) {
+        const m = new THREE.Mesh(jointGeo, jointMat);
         scene.add(m);
         handMeshes.push(m);
     }
 
+    window.addEventListener('resize', onWindowResize);
     animate();
 }
 
-// ========================
-// LOOP
-// ========================
-function animate(){
-    requestAnimationFrame(animate);
+function onWindowResize() {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+}
 
-    // 前後移動
+function animate() {
+    requestAnimationFrame(animate);
+    
+    // 慣性移動
     camera.position.z += velocityZ;
-    velocityZ *= 0.9;
+    velocityZ *= 0.95;
 
     renderStereo();
 }
 
-// ========================
-// STEREO VR（疑似）
-// ========================
-function renderStereo(){
+function renderStereo() {
+    const w = window.innerWidth / 2;
+    const h = window.innerHeight;
     renderer.setScissorTest(true);
 
-    const w = innerWidth/2;
-    const h = innerHeight;
-
-    // LEFT
-    renderer.setViewport(0,0,w,h);
-    renderer.setScissor(0,0,w,h);
-
+    // 左目
+    renderer.setViewport(0, 0, w, h);
+    renderer.setScissor(0, 0, w, h);
     camera.position.x -= eyeOffset;
-    renderer.render(scene,camera);
+    renderer.render(scene, camera);
     camera.position.x += eyeOffset;
 
-    // RIGHT
-    renderer.setViewport(w,0,w,h);
-    renderer.setScissor(w,0,w,h);
-
+    // 右目
+    renderer.setViewport(w, 0, w, h);
+    renderer.setScissor(w, 0, w, h);
     camera.position.x += eyeOffset;
-    renderer.render(scene,camera);
+    renderer.render(scene, camera);
     camera.position.x -= eyeOffset;
 
     renderer.setScissorTest(false);
 }
 
-// ========================
-// GYRO
-// ========================
-window.addEventListener("deviceorientation",(e)=>{
-    camera.rotation.order = "YXZ";
-    camera.rotation.y = e.alpha * Math.PI/180;
-    camera.rotation.x = e.beta * Math.PI/180;
+// ジャイロ制御（デバイスの向きをカメラに反映）
+window.addEventListener("deviceorientation", (e) => {
+    if (!e.alpha) return;
+    const alpha = THREE.MathUtils.degToRad(e.alpha);
+    const beta = THREE.MathUtils.degToRad(e.beta);
+    const gamma = THREE.MathUtils.degToRad(e.gamma);
+
+    const orient = window.orientation ? THREE.MathUtils.degToRad(window.orientation) : 0;
+    
+    // 簡易クォータニオン回転（スマートフォンの向きに合わせる）
+    const zee = new THREE.Vector3(0, 0, 1);
+    const euler = new THREE.Euler(beta, alpha, -gamma, 'YXZ');
+    camera.quaternion.setFromEuler(euler);
 });
 
-// ========================
-// CAMERA MOTION
-// ========================
-function setupMotion(video){
-    const canvas = document.createElement("canvas");
-    const ctx = canvas.getContext("2d");
-
-    canvas.width=160;
-    canvas.height=120;
-
-    setInterval(()=>{
-        ctx.drawImage(video,0,0,160,120);
-        const img = ctx.getImageData(0,0,160,120);
-
-        if(prevFrame){
-            let diff=0;
-
-            for(let i=0;i<img.data.length;i+=16){
-                diff += Math.abs(img.data[i]-prevFrame.data[i]);
-            }
-
-            diff /= 1000;
-
-            velocityZ += diff * sensitivity;
-
-            if(diff>12 && navigator.vibrate){
-                navigator.vibrate(10);
-            }
-        }
-
-        prevFrame = img;
-
-        document.getElementById("status").innerText =
-            diff>10 ? "MOVING" : "STABLE";
-
-    },50);
-}
-
-// ========================
-// HAND TRACKING
-// ========================
-function setupHands(video){
+// ハンドトラッキング
+async function setupHands(video) {
     const hands = new Hands({
-        locateFile: f=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
+        locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
     });
 
     hands.setOptions({
-        maxNumHands:1,
-        modelComplexity:1,
-        minDetectionConfidence:0.7,
-        minTrackingConfidence:0.7
+        maxNumHands: 1,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.8,
+        minTrackingConfidence: 0.8
     });
 
-    hands.onResults(res=>{
-        if(!res.multiHandLandmarks) return;
+    hands.onResults(res => {
+        if (!res.multiHandLandmarks || res.multiHandLandmarks.length === 0) return;
+        const landmarks = res.multiHandLandmarks[0];
 
-        const lm = res.multiHandLandmarks[0];
+        // 自動キャリブレーション：手首の深度(Z)が一定以上遠ければリーチを設定
+        if (!isCalibrated && landmarks[0].z < -0.15) {
+            reachZ = Math.abs(1.0 / landmarks[0].z) * 0.15;
+            isCalibrated = true;
+            document.getElementById("status").innerText = "CALIBRATED";
+        }
 
-        lm.forEach((p,i)=>{
+        const statusEl = document.getElementById("status");
+        
+        landmarks.forEach((p, i) => {
             const m = handMeshes[i];
-            m.position.x = (p.x-0.5)*2;
-            m.position.y = -(p.y-0.5)*2;
-            m.position.z = -p.z*0.5;
+            // カメラ座標からワールド座標への変換
+            const x = (p.x - 0.5) * 1.5;
+            const y = -(p.y - 0.5) * 1.5;
+            const z = -p.z * reachZ - 0.5;
+
+            // カメラの向きに合わせて手の位置を回転
+            const pos = new THREE.Vector3(x, y, z).applyQuaternion(camera.quaternion);
+            m.position.copy(camera.position).add(pos);
         });
 
-        // GRAB SYSTEM
-        objects.forEach(obj=>{
-            lm.forEach(p=>{
-                const dx = obj.position.x - (p.x-0.5)*2;
-                const dy = obj.position.y - (-(p.y-0.5)*2);
-                const dz = obj.position.z + p.z*0.5;
-
-                const dist = Math.sqrt(dx*dx+dy*dy+dz*dz);
-
-                if(dist<0.15){
-                    obj.position.set(
-                        (p.x-0.5)*2,
-                        -(p.y-0.5)*2,
-                        -1
-                    );
-
-                    if(navigator.vibrate){
-                        navigator.vibrate(5);
-                    }
-                }
-            });
+        // インタラクション（掴む）
+        const indexTip = handMeshes[8].position;
+        grabbableObjects.forEach(obj => {
+            const dist = indexTip.distanceTo(obj.position);
+            if (dist < 0.15) {
+                obj.position.lerp(indexTip, 0.2); // 吸い付くような挙動
+                if (navigator.vibrate) navigator.vibrate(5);
+            }
         });
     });
 
-    const cam = new Camera(video,{
-        onFrame:async()=>{
-            await hands.send({image:video});
-        },
-        width:1280,
-        height:720
+    const cam = new Camera(video, {
+        onFrame: async () => { await hands.send({ image: video }); },
+        width: 1280, height: 720, facingMode: "environment"
     });
-
     cam.start();
 }
 
-// ========================
-// START
-// ========================
-document.getElementById("start").onclick=async()=>{
-    document.getElementById("overlay").style.display="none";
-
-    const video=document.getElementById("video");
-
+document.getElementById("start").onclick = async () => {
+    // ジャイロの許可（iOS対策）
+    if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+        await DeviceOrientationEvent.requestPermission();
+    }
+    
+    document.getElementById("overlay").style.display = "none";
+    const video = document.getElementById("video");
     init();
-    setupMotion(video);
     setupHands(video);
+    
+    if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
 };
-
-// RESET
-document.getElementById("reset").onclick=()=>{
-    camera.position.z=1;
-    velocityZ=0;
-};
-
 </script>
-
 </body>
 </html>
