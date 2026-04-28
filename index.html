@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Pseudo VR Step1</title>
+<title>Full Pseudo VR</title>
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
@@ -11,55 +11,131 @@
 
 <style>
 body { margin:0; overflow:hidden; background:black; }
-#btn {
-    position: fixed;
+
+#overlay {
+    position:fixed;
     inset:0;
     display:flex;
     justify-content:center;
     align-items:center;
-    background:white;
+    background:linear-gradient(135deg,#fff,#ddd);
     z-index:10;
 }
-button { font-size:24px; padding:20px 40px; }
+
+#panel {
+    text-align:center;
+}
+
+button {
+    font-size:22px;
+    padding:15px 40px;
+    border:none;
+    border-radius:30px;
+    background:#4285F4;
+    color:white;
+}
+
+#hud {
+    position:fixed;
+    top:10px;
+    left:10px;
+    right:10px;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    pointer-events:none;
+    z-index:5;
+}
+
+#status {
+    background:rgba(0,0,0,0.6);
+    color:white;
+    padding:6px 10px;
+    border-radius:20px;
+    font-size:12px;
+}
+
+#crosshair {
+    position:fixed;
+    top:50%;
+    left:50%;
+    width:6px;
+    height:6px;
+    background:white;
+    border-radius:50%;
+    transform:translate(-50%,-50%);
+    opacity:0.8;
+    z-index:5;
+}
 </style>
 </head>
 
 <body>
 
-<div id="btn"><button>START</button></div>
+<div id="overlay">
+  <div id="panel">
+    <h2>FULL PSEUDO VR</h2>
+    <button id="start">START</button>
+    <p>スマホを動かしてVR体験</p>
+  </div>
+</div>
+
+<div id="hud">
+  <div id="status">READY</div>
+  <button id="reset">CENTER</button>
+</div>
+
+<div id="crosshair"></div>
+
 <video id="video" playsinline style="display:none;"></video>
 
 <script>
-let camera, scene, renderer;
-let videoTexture;
+let scene, renderer;
+let camera;
+
 let handMeshes = [];
+let objects = [];
 
-let prevImageData = null;
 let velocityZ = 0;
+let prevFrame = null;
+let sensitivity = 0.00002;
 
-// ======================
-// 初期化
-// ======================
-function init() {
+const eyeOffset = 0.03;
+
+// ========================
+// INIT
+// ========================
+function init(){
     scene = new THREE.Scene();
 
-    camera = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.01, 10);
+    camera = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.01, 50);
     camera.position.z = 1;
 
-    renderer = new THREE.WebGLRenderer({ alpha:true });
+    renderer = new THREE.WebGLRenderer({ antialias:true });
     renderer.setSize(innerWidth, innerHeight);
     document.body.appendChild(renderer.domElement);
 
-    const video = document.getElementById("video");
-    videoTexture = new THREE.VideoTexture(video);
-    scene.background = videoTexture;
+    // GRID
+    const grid = new THREE.GridHelper(10,20,0x00ffcc,0x222222);
+    scene.add(grid);
 
-    // 手
-    const geo = new THREE.SphereGeometry(0.02, 12, 12);
+    // OBJECTS
+    for(let i=0;i<5;i++){
+        const mesh = new THREE.Mesh(
+            new THREE.BoxGeometry(0.1,0.1,0.1),
+            new THREE.MeshBasicMaterial({ color:0x4285F4 })
+        );
+        mesh.position.set((Math.random()-0.5)*2,1+(Math.random()),-1.5);
+        scene.add(mesh);
+        objects.push(mesh);
+    }
+
+    // HANDS
+    const geo = new THREE.SphereGeometry(0.02,12,12);
     const mat = new THREE.MeshBasicMaterial({ color:0x00ffcc });
 
-    for (let i=0;i<21;i++){
-        const m = new THREE.Mesh(geo, mat);
+    for(let i=0;i<21;i++){
+        const m = new THREE.Mesh(geo,mat);
         scene.add(m);
         handMeshes.push(m);
     }
@@ -67,74 +143,100 @@ function init() {
     animate();
 }
 
-// ======================
-// 描画ループ
-// ======================
+// ========================
+// LOOP
+// ========================
 function animate(){
     requestAnimationFrame(animate);
 
-    // 前後移動適用
+    // 前後移動
     camera.position.z += velocityZ;
-    velocityZ *= 0.9; // 減衰（重要）
+    velocityZ *= 0.9;
 
-    renderer.render(scene, camera);
+    renderStereo();
 }
 
-// ======================
-// ジャイロ
-// ======================
-function setupGyro(){
-    window.addEventListener("deviceorientation", (e)=>{
-        camera.rotation.order = "YXZ";
+// ========================
+// STEREO VR（疑似）
+// ========================
+function renderStereo(){
+    renderer.setScissorTest(true);
 
-        camera.rotation.y = e.alpha * Math.PI/180;
-        camera.rotation.x = e.beta * Math.PI/180;
-    });
+    const w = innerWidth/2;
+    const h = innerHeight;
+
+    // LEFT
+    renderer.setViewport(0,0,w,h);
+    renderer.setScissor(0,0,w,h);
+
+    camera.position.x -= eyeOffset;
+    renderer.render(scene,camera);
+    camera.position.x += eyeOffset;
+
+    // RIGHT
+    renderer.setViewport(w,0,w,h);
+    renderer.setScissor(w,0,w,h);
+
+    camera.position.x += eyeOffset;
+    renderer.render(scene,camera);
+    camera.position.x -= eyeOffset;
+
+    renderer.setScissorTest(false);
 }
 
-// ======================
-// カメラ差分（超軽量版）
-// ======================
-function setupMotionEstimation(video){
+// ========================
+// GYRO
+// ========================
+window.addEventListener("deviceorientation",(e)=>{
+    camera.rotation.order = "YXZ";
+    camera.rotation.y = e.alpha * Math.PI/180;
+    camera.rotation.x = e.beta * Math.PI/180;
+});
+
+// ========================
+// CAMERA MOTION
+// ========================
+function setupMotion(video){
     const canvas = document.createElement("canvas");
     const ctx = canvas.getContext("2d");
 
-    canvas.width = 160; // 軽量化
-    canvas.height = 120;
+    canvas.width=160;
+    canvas.height=120;
 
     setInterval(()=>{
-        ctx.drawImage(video,0,0,canvas.width,canvas.height);
-        const img = ctx.getImageData(0,0,canvas.width,canvas.height);
+        ctx.drawImage(video,0,0,160,120);
+        const img = ctx.getImageData(0,0,160,120);
 
-        if(prevImageData){
-            let diff = 0;
+        if(prevFrame){
+            let diff=0;
 
-            for(let i=0;i<img.data.length;i+=4){
-                diff += Math.abs(img.data[i] - prevImageData.data[i]);
+            for(let i=0;i<img.data.length;i+=16){
+                diff += Math.abs(img.data[i]-prevFrame.data[i]);
             }
 
-            diff /= img.data.length;
+            diff /= 1000;
 
-            // 前後移動に変換
-            velocityZ += diff * 0.00002;
+            velocityZ += diff * sensitivity;
 
-            // 疑似ハプティック
-            if(diff > 15 && navigator.vibrate){
+            if(diff>12 && navigator.vibrate){
                 navigator.vibrate(10);
             }
         }
 
-        prevImageData = img;
+        prevFrame = img;
 
-    }, 50);
+        document.getElementById("status").innerText =
+            diff>10 ? "MOVING" : "STABLE";
+
+    },50);
 }
 
-// ======================
-// MediaPipe
-// ======================
+// ========================
+// HAND TRACKING
+// ========================
 function setupHands(video){
     const hands = new Hands({
-        locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
+        locateFile: f=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
     });
 
     hands.setOptions({
@@ -151,14 +253,37 @@ function setupHands(video){
 
         lm.forEach((p,i)=>{
             const m = handMeshes[i];
-            m.position.x = (p.x - 0.5)*2;
-            m.position.y = -(p.y - 0.5)*2;
-            m.position.z = -p.z * 0.5;
+            m.position.x = (p.x-0.5)*2;
+            m.position.y = -(p.y-0.5)*2;
+            m.position.z = -p.z*0.5;
+        });
+
+        // GRAB SYSTEM
+        objects.forEach(obj=>{
+            lm.forEach(p=>{
+                const dx = obj.position.x - (p.x-0.5)*2;
+                const dy = obj.position.y - (-(p.y-0.5)*2);
+                const dz = obj.position.z + p.z*0.5;
+
+                const dist = Math.sqrt(dx*dx+dy*dy+dz*dz);
+
+                if(dist<0.15){
+                    obj.position.set(
+                        (p.x-0.5)*2,
+                        -(p.y-0.5)*2,
+                        -1
+                    );
+
+                    if(navigator.vibrate){
+                        navigator.vibrate(5);
+                    }
+                }
+            });
         });
     });
 
     const cam = new Camera(video,{
-        onFrame: async ()=>{
+        onFrame:async()=>{
             await hands.send({image:video});
         },
         width:1280,
@@ -168,27 +293,25 @@ function setupHands(video){
     cam.start();
 }
 
-// ======================
-// スタート
-// ======================
-document.querySelector("button").onclick = async ()=>{
-    document.getElementById("btn").style.display="none";
+// ========================
+// START
+// ========================
+document.getElementById("start").onclick=async()=>{
+    document.getElementById("overlay").style.display="none";
+
+    const video=document.getElementById("video");
 
     init();
-    setupGyro();
-
-    const video = document.getElementById("video");
-
-    setupMotionEstimation(video);
+    setupMotion(video);
     setupHands(video);
 };
 
-// リサイズ
-addEventListener("resize", ()=>{
-    camera.aspect = innerWidth/innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(innerWidth, innerHeight);
-});
+// RESET
+document.getElementById("reset").onclick=()=>{
+    camera.position.z=1;
+    velocityZ=0;
+};
+
 </script>
 
 </body>
