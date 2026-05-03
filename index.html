@@ -1,178 +1,204 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>Pseudo VR Stable</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CHRONO-CITY: GLASS WARP</title>
+    <style>
+        body, html {
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            overflow: hidden; background-color: #fff;
+            font-family: 'Share Tech Mono', monospace;
+        }
 
-<style>
-body { margin:0; overflow:hidden; background:#000; font-family:sans-serif; }
+        .viewport {
+            position: absolute; top: 0; left: 0;
+            width: 100vw; height: 100vh;
+        }
 
-#overlay {
-    position:fixed; inset:0;
-    display:flex; justify-content:center; align-items:center;
-    background:#000;
-    color:white; z-index:10;
-}
-button {
-    font-size:22px;
-    padding:15px 40px;
-    border:none;
-    border-radius:30px;
-    background:#4285F4;
-    color:white;
-}
-</style>
+        /* 1. 通常層（土台）*/
+        #base-layer { z-index: 5; }
+
+        /* 2. ガラスの歪み層 (CSS Backdrop Filter)
+           ここが「ガラス越し」の歪みを作ります
+        */
+        #glass-warp-layer {
+            z-index: 10;
+            pointer-events: none;
+            /* 画面端だけを歪ませるためのマスク */
+            -webkit-mask-image: radial-gradient(circle, transparent 30%, black 80%);
+            mask-image: radial-gradient(circle, transparent 30%, black 80%);
+            
+            /* ガラスのような屈折とボケをシミュレート */
+            backdrop-filter: blur(4px) saturate(1.2);
+        }
+
+        /* 3. アナグリフ層（周辺のみ）*/
+        #anaglyph-layer {
+            z-index: 15;
+            pointer-events: none;
+            -webkit-mask-image: radial-gradient(circle, transparent 35%, black 85%);
+            mask-image: radial-gradient(circle, transparent 35%, black 85%);
+            /* アナグリフの「色の分離」を強調 */
+            mix-blend-mode: screen; 
+            opacity: 0.9;
+        }
+
+        #hud {
+            position: absolute; top: 30px; left: 30px; z-index: 200;
+            background: rgba(255, 255, 255, 0.9); padding: 15px;
+            border: 2px solid #000; pointer-events: none;
+        }
+
+        #init-screen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: #fff; z-index: 1000; display: flex;
+            flex-direction: column; justify-content: center; align-items: center;
+            cursor: pointer;
+        }
+
+        .hidden { opacity: 0; pointer-events: none; }
+    </style>
 </head>
 <body>
 
-<div id="overlay">
-    <button id="start">START VR</button>
-</div>
+    <div id="init-screen">
+        <h1>GLASS-WARP CITY</h1>
+        <p>[ EDGE DISTORTION ACTIVE ]</p>
+    </div>
 
-<video id="video" playsinline style="display:none;"></video>
+    <div id="hud">
+        <b>OPTICS:</b> PERIPHERAL_GLASS_REFRACTION<br>
+        <b>TIMELINE:</b> <span id="seek-val">STABLE</span>
+    </div>
 
-<script type="module">
-import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
-import { DeviceOrientationControls } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/DeviceOrientationControls.js";
-import { Hands } from "https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js";
-import { Camera } from "https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js";
+    <div id="base-layer" class="viewport"></div>
+    <div id="glass-warp-layer" class="viewport"></div>
+    <div id="anaglyph-layer" class="viewport"></div>
 
-let scene, camera, renderer, controls, stereo;
-let handMeshes = [];
+    <script type="importmap">
+        { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+    </script>
 
-document.getElementById("start").onclick = async () => {
+    <script type="module">
+        import * as THREE from 'three';
+        import { AnaglyphEffect } from 'https://unpkg.com/three@0.160.0/examples/jsm/effects/AnaglyphEffect.js';
 
-    // iOS許可
-    if (typeof DeviceOrientationEvent.requestPermission === 'function') {
-        const res = await DeviceOrientationEvent.requestPermission();
-        if (res !== 'granted') {
-            alert("ジャイロ許可が必要");
-            return;
-        }
-    }
+        const CONFIG = {
+            GRAVITY: -0.018, JUMP: 0.45, SPEED: 0.22,
+            HEIGHT: 2.0, FRICTION: 0.9, MAX_HISTORY: 2500
+        };
 
-    document.getElementById("overlay").style.display = "none";
+        let isLocked = false, timelineIdx = -1, tVel = 0, pVelY = 0;
+        let history = [];
+        const move = { w:0, s:0, a:0, d:0 };
 
-    init();
-    startHands();
-};
+        // --- Scene Setup ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0xffffff);
+        const camera = new THREE.PerspectiveCamera(85, window.innerWidth/window.innerHeight, 0.1, 2000);
+        camera.rotation.order = 'YXZ';
 
-function init() {
+        const rendererBase = new THREE.WebGLRenderer({ antialias: true });
+        rendererBase.setSize(window.innerWidth, window.innerHeight);
+        document.getElementById('base-layer').appendChild(rendererBase.domElement);
 
-    scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x050505);
+        const rendererAna = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        rendererAna.setSize(window.innerWidth, window.innerHeight);
+        const effectAna = new AnaglyphEffect(rendererAna);
+        effectAna.setSize(window.innerWidth, window.innerHeight);
+        document.getElementById('anaglyph-layer').appendChild(rendererAna.domElement);
 
-    camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.05, 50);
+        scene.add(new THREE.AmbientLight(0xffffff, 1.5));
 
-    renderer = new THREE.WebGLRenderer({ antialias:true });
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    document.body.appendChild(renderer.domElement);
+        // --- Terrain ---
+        function getH(x, z) { return Math.sin(x*0.1)*Math.cos(z*0.1)*5.0; }
+        const geo = new THREE.PlaneGeometry(400, 400, 100, 100);
+        const v = geo.attributes.position;
+        for(let i=0; i<v.count; i++) v.setZ(i, getH(v.getX(i), v.getY(i)));
+        geo.computeVertexNormals();
+        
+        const tex = (() => {
+            const c = document.createElement('canvas'); c.width=c.height=512;
+            const ctx = c.getContext('2d'); ctx.fillStyle='#fff'; ctx.fillRect(0,0,512,512);
+            ctx.fillStyle='#000'; for(let i=0;i<16;i++)for(let j=0;j<16;j++)if((i+j)%2===0)ctx.fillRect(i*32,j*32,32,32);
+            const t = new THREE.CanvasTexture(c); t.wrapS=t.wrapT=THREE.RepeatWrapping; t.repeat.set(20,20);
+            return t;
+        })();
+        const ground = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({map: tex}));
+        ground.rotation.x = -Math.PI/2;
+        scene.add(ground);
 
-    controls = new DeviceOrientationControls(camera);
-
-    stereo = new THREE.StereoCamera();
-    stereo.eyeSep = 0.064;
-
-    scene.add(new THREE.GridHelper(10,10));
-    scene.add(new THREE.AmbientLight(0xffffff,0.6));
-
-    // 手ジョイント
-    const geo = new THREE.SphereGeometry(0.01, 8, 8);
-    for (let i=0;i<21;i++){
-        const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({color:0x00ffcc}));
-        scene.add(m);
-        handMeshes.push(m);
-    }
-
-    window.addEventListener("resize", onResize);
-
-    animate();
-}
-
-function animate(){
-    requestAnimationFrame(animate);
-
-    controls.update();
-    stereo.update(camera);
-
-    const w = window.innerWidth/2;
-    const h = window.innerHeight;
-
-    renderer.setScissorTest(true);
-
-    // 左目
-    renderer.setViewport(0,0,w,h);
-    renderer.setScissor(0,0,w,h);
-    renderer.render(scene, stereo.cameraL);
-
-    // 右目
-    renderer.setViewport(w,0,w,h);
-    renderer.setScissor(w,0,w,h);
-    renderer.render(scene, stereo.cameraR);
-
-    renderer.setScissorTest(false);
-}
-
-function onResize(){
-    camera.aspect = window.innerWidth/window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
-}
-
-// =====================
-// Hand Tracking
-// =====================
-function startHands(){
-
-    const video = document.getElementById("video");
-
-    const hands = new Hands({
-        locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
-    });
-
-    hands.setOptions({
-        maxNumHands: 1,
-        modelComplexity: 0,
-        minDetectionConfidence: 0.7,
-        minTrackingConfidence: 0.6
-    });
-
-    hands.onResults(res => {
-
-        if (!res.multiHandLandmarks?.length) return;
-
-        const dist = 0.4;
-
-        res.multiHandLandmarks[0].forEach((p,i)=>{
-
-            const x = (p.x - 0.5) * 0.3;
-            const y = -(p.y - 0.5) * 0.3;
-            const z = -dist;
-
-            const vec = new THREE.Vector3(x,y,z);
-
-            // カメラ基準 → ワールドへ
-            vec.applyQuaternion(camera.quaternion);
-            vec.add(camera.position);
-
-            handMeshes[i].position.copy(vec);
+        // --- Controls ---
+        document.getElementById('init-screen').onclick = () => document.body.requestPointerLock();
+        document.addEventListener('pointerlockchange', () => {
+            isLocked = (document.pointerLockElement === document.body);
+            document.getElementById('init-screen').classList.toggle('hidden', isLocked);
         });
-    });
+        window.onkeydown = e => { if(isLocked){ 
+            const k = e.code.replace('Key','').toLowerCase(); if(move.hasOwnProperty(k)) move[k]=1;
+            if(e.code==='Space'&&camera.position.y <= getH(camera.position.x,-camera.position.z)+CONFIG.HEIGHT+0.2) pVelY=CONFIG.JUMP;
+        }};
+        window.onkeyup = e => { const k = e.code.replace('Key','').toLowerCase(); if(move.hasOwnProperty(k)) move[k]=0; };
+        window.onwheel = e => { if(isLocked) tVel += e.deltaY * 0.015; };
+        document.addEventListener('mousemove', e => { if(isLocked && Math.abs(tVel)<0.1){ 
+            camera.rotation.y-=e.movementX*0.002; camera.rotation.x-=e.movementY*0.002; 
+            camera.rotation.x=Math.max(-1.4,Math.min(1.4,camera.rotation.x)); 
+        }});
 
-    const cam = new Camera(video,{
-        onFrame: async ()=>{
-            // 負荷軽減（50%間引き）
-            if (Math.random() < 0.5) return;
-            await hands.send({image:video});
-        },
-        width:640,
-        height:480,
-        facingMode:"environment"
-    });
+        // --- Loop ---
+        function animate() {
+            requestAnimationFrame(animate);
+            tVel *= CONFIG.FRICTION;
+            const isSeeking = Math.abs(tVel) > 0.1;
 
-    cam.start();
-}
-</script>
+            // ガラスの歪みとアナグリフの動的な変化
+            const glass = document.getElementById('glass-warp-layer');
+            const ana = document.getElementById('anaglyph-layer');
+
+            if(isSeeking) {
+                // 巻き戻し速度に合わせてガラスがさらに歪み、中央へ迫る
+                const warpScale = 1 + Math.abs(tVel) * 0.1;
+                const skew = tVel * 3;
+                glass.style.transform = `scale(${warpScale}) skewX(${skew}deg)`;
+                ana.style.transform = `scale(${warpScale}) skewX(${skew}deg)`;
+                document.getElementById('seek-val').innerText = "SEEKING...";
+            } else {
+                glass.style.transform = `scale(1) skewX(0deg)`;
+                ana.style.transform = `scale(1) skewX(0deg)`;
+                document.getElementById('seek-val').innerText = "STABLE";
+            }
+
+            // Timeline Logic
+            if (isSeeking && history.length > 0) {
+                if (timelineIdx === -1) timelineIdx = history.length - 1;
+                timelineIdx += tVel;
+                timelineIdx = Math.max(0, Math.min(history.length-1, timelineIdx));
+                const s = history[Math.floor(timelineIdx)];
+                camera.position.copy(s.p); camera.rotation.copy(s.r);
+            } else {
+                if (timelineIdx !== -1) { history.splice(Math.floor(timelineIdx)); timelineIdx = -1; }
+                if (isLocked) {
+                    pVelY += CONFIG.GRAVITY; camera.position.y += pVelY;
+                    const h = getH(camera.position.x, -camera.position.z);
+                    if(camera.position.y < h + CONFIG.HEIGHT) { camera.position.y = h + CONFIG.HEIGHT; pVelY = 0; }
+                    camera.translateZ((move.s - move.w) * CONFIG.SPEED);
+                    camera.translateX((move.d - move.a) * CONFIG.SPEED);
+                }
+                history.push({ p: camera.position.clone(), r: camera.rotation.clone() });
+                if (history.length > CONFIG.MAX_HISTORY) history.shift();
+            }
+
+            rendererBase.render(scene, camera);
+            effectAna.render(scene, camera);
+        }
+
+        window.onresize = () => {
+            const w = window.innerWidth, h = window.innerHeight;
+            camera.aspect = w/h; camera.updateProjectionMatrix();
+            rendererBase.setSize(w, h); effectAna.setSize(w, h);
+        };
+        animate();
+    </script>
 </body>
 </html>
